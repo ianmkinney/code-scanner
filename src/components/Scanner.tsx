@@ -15,6 +15,10 @@ export default function Scanner() {
   // const [attemptCount, setAttemptCount] = useState(0);
   const [mpLabel, setMpLabel] = useState("MP");
   const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [username, setUsername] = useState<string>("");
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userCount, setUserCount] = useState<number | null>(null);
+  const [userCans, setUserCans] = useState<Array<{id: string, code: string, created_at: string}> | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -82,6 +86,15 @@ export default function Scanner() {
   }, []);
 
   // stopCamera defined later
+  const stopCamera = useCallback(() => {
+    setIsScanning(false);
+    if (mediaStreamRef.current) {
+      try { mediaStreamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
+      mediaStreamRef.current = null;
+    }
+    if (ocrTimerRef.current) { window.clearInterval(ocrTimerRef.current); ocrTimerRef.current = null; }
+    hideBanner();
+  }, [hideBanner]);
 
   const processFoundCode = useCallback(async (code: string) => {
     // Check duplicate in Supabase (if configured)
@@ -135,15 +148,27 @@ export default function Scanner() {
     // Save new code to Supabase (if configured)
     if (supabase) {
       try {
+        const insertPayload: { code: string; user_id?: string } = { code };
+        if (userId) insertPayload.user_id = userId;
         const { error } = await supabase
           .from("scanned_codes")
-          .insert({ code });
+          .insert(insertPayload);
         if (!error) setTotalCount((n) => (typeof n === "number" ? n + 1 : n));
+        if (!error && userId) {
+          setUserCount((n) => (typeof n === "number" ? n + 1 : n));
+          // Refresh user cans list
+          const { data: cans } = await supabase
+            .from("scanned_codes")
+            .select("id, code, created_at")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false });
+          setUserCans(cans || []);
+        }
       } catch {
         // ignore persistence errors for UX
       }
     }
-  }, [hideBanner, showBanner, showStatus]);
+  }, [hideBanner, showBanner, showStatus, stopCamera, userId]);
 
   // handleCodeFound removed (direct flows call processFoundCode)
 
@@ -298,85 +323,85 @@ export default function Scanner() {
     }
   }, []);
 
-  const startCameraLegacy = useCallback(async () => {
-    try {
-      showStatus("Requesting camera access...", "info");
-      if (location.protocol !== "https:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
-        showStatus("Camera requires HTTPS. Use your tunnel link.", "error");
-        return;
-      }
-      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera not supported on this device");
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const inputs = devices.filter((d) => d.kind === "videoinput");
-      const back = inputs.find((d) => /back|rear|environment/i.test(d.label));
-      const envFacing: ConstrainDOMString = "environment";
-      const constraints: MediaStreamConstraints = back
-        ? { video: { deviceId: { exact: back.deviceId } } }
-        : { video: { facingMode: { ideal: envFacing } } };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      mediaStreamRef.current = stream;
-      if (!viewportRef.current) return;
-      if (!videoRef.current) {
-        const v = document.createElement("video");
-        v.setAttribute("playsinline", "true");
-        v.muted = true;
-        v.autoplay = true;
-        v.style.width = "100%";
-        v.style.height = "100%";
-        viewportRef.current.innerHTML = "";
-        viewportRef.current.appendChild(v);
-        videoRef.current = v;
-      }
-      const video = videoRef.current!;
-      video.srcObject = stream;
-      // Update MP asap based on track settings
-      updateMp();
-      await video.play();
-      await waitForVideoDims();
-      updateMp();
-      // Aggressive polling for first few seconds to ensure non-zero MP
-      if (mpPollRef.current) { window.clearInterval(mpPollRef.current); mpPollRef.current = null; }
-      let polls = 0;
-      mpPollRef.current = window.setInterval(() => {
-        polls += 1;
-        updateMp();
-        if (polls >= 30) { // ~6 seconds at 200ms
-          if (mpPollRef.current) { window.clearInterval(mpPollRef.current); mpPollRef.current = null; }
-        }
-      }, 200) as number;
-      // Update MP again when metadata/size known
-      video.onloadedmetadata = () => updateMp();
-      // Some browsers fire resize when dimensions change
-      video.onresize = () => updateMp();
-      setIsScanning(true);
-      showStatus("Camera active - align code under QR in window", "success");
-      showBanner("📷 Scanning for code under QR...", "info");
-      window.setTimeout(updateMp, 800);
-      if (ocrTimerRef.current) {
-        window.clearInterval(ocrTimerRef.current);
-        ocrTimerRef.current = null;
-      }
-      ocrTimerRef.current = window.setInterval(async () => {
-        updateMp();
-        if (!videoRef.current) return;
-        const qr = readQrInViewfinderOnce();
-        let printed: string | null = null;
-        if (qr && qr.text) {
-          const urlCode = extractCodeFromURL(qr.text) || null;
-          printed = await ocrUnderViewfinderOnce(true);
-          if (printed) processFoundCode(printed);
-          else if (urlCode) processFoundCode(urlCode);
-        } else {
-          printed = await ocrUnderViewfinderOnce(true);
-          if (printed) processFoundCode(printed);
-        }
-        // attempt counter disabled
-      }, 1200) as number;
-    } catch {
-      showStatus("Camera not available. Please use manual entry.", "error");
-      // console.error(e);
-    }
-  }, [extractCodeFromURL, ocrUnderViewfinderOnce, processFoundCode, readQrInViewfinderOnce, showBanner, showStatus, updateMp, waitForVideoDims]);
+  // const startCameraLegacy = useCallback(async () => {
+  //   try {
+  //     showStatus("Requesting camera access...", "info");
+  //     if (location.protocol !== "https:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+  //       showStatus("Camera requires HTTPS. Use your tunnel link.", "error");
+  //       return;
+  //     }
+  //     if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera not supported on this device");
+  //     const devices = await navigator.mediaDevices.enumerateDevices();
+  //     const inputs = devices.filter((d) => d.kind === "videoinput");
+  //     const back = inputs.find((d) => /back|rear|environment/i.test(d.label));
+  //     const envFacing: ConstrainDOMString = "environment";
+  //     const constraints: MediaStreamConstraints = back
+  //       ? { video: { deviceId: { exact: back.deviceId } } }
+  //       : { video: { facingMode: { ideal: envFacing } } };
+  //     const stream = await navigator.mediaDevices.getUserMedia(constraints);
+  //     mediaStreamRef.current = stream;
+  //     if (!viewportRef.current) return;
+  //     if (!videoRef.current) {
+  //       const v = document.createElement("video");
+  //       v.setAttribute("playsinline", "true");
+  //       v.muted = true;
+  //       v.autoplay = true;
+  //       v.style.width = "100%";
+  //       v.style.height = "100%";
+  //       viewportRef.current.innerHTML = "";
+  //       viewportRef.current.appendChild(v);
+  //       videoRef.current = v;
+  //     }
+  //     const video = videoRef.current!;
+  //     video.srcObject = stream;
+  //     // Update MP asap based on track settings
+  //     updateMp();
+  //     await video.play();
+  //     await waitForVideoDims();
+  //     updateMp();
+  //     // Aggressive polling for first few seconds to ensure non-zero MP
+  //     if (mpPollRef.current) { window.clearInterval(mpPollRef.current); mpPollRef.current = null; }
+  //     let polls = 0;
+  //     mpPollRef.current = window.setInterval(() => {
+  //       polls += 1;
+  //       updateMp();
+  //       if (polls >= 30) { // ~6 seconds at 200ms
+  //         if (mpPollRef.current) { window.clearInterval(mpPollRef.current); mpPollRef.current = null; }
+  //       }
+  //     }, 200) as number;
+  //     // Update MP again when metadata/size known
+  //     video.onloadedmetadata = () => updateMp();
+  //     // Some browsers fire resize when dimensions change
+  //     video.onresize = () => updateMp();
+  //     setIsScanning(true);
+  //     showStatus("Camera active - align code under QR in window", "success");
+  //     showBanner("📷 Scanning for code under QR...", "info");
+  //     window.setTimeout(updateMp, 800);
+  //     if (ocrTimerRef.current) {
+  //       window.clearInterval(ocrTimerRef.current);
+  //       ocrTimerRef.current = null;
+  //     }
+  //     ocrTimerRef.current = window.setInterval(async () => {
+  //       updateMp();
+  //       if (!videoRef.current) return;
+  //       const qr = readQrInViewfinderOnce();
+  //       let printed: string | null = null;
+  //       if (qr && qr.text) {
+  //         const urlCode = extractCodeFromURL(qr.text) || null;
+  //         printed = await ocrUnderViewfinderOnce(true);
+  //         if (printed) processFoundCode(printed);
+  //         else if (urlCode) processFoundCode(urlCode);
+  //       } else {
+  //         printed = await ocrUnderViewfinderOnce(true);
+  //         if (printed) processFoundCode(printed);
+  //       }
+  //       // attempt counter disabled
+  //     }, 1200) as number;
+  //   } catch {
+  //     showStatus("Camera not available. Please use manual entry.", "error");
+  //     // console.error(e);
+  //   }
+  // }, [extractCodeFromURL, ocrUnderViewfinderOnce, processFoundCode, readQrInViewfinderOnce, showBanner, showStatus, updateMp, waitForVideoDims]);
 
   const startCamera = useCallback(async () => {
     try {
@@ -449,16 +474,6 @@ export default function Scanner() {
     }
   }, [extractCodeFromURL, ocrUnderViewfinderOnce, processFoundCode, readQrInViewfinderOnce, showBanner, showStatus, updateMp, waitForVideoDims]);
 
-  const stopCamera = useCallback(() => {
-    setIsScanning(false);
-    if (mediaStreamRef.current) {
-      try { mediaStreamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
-      mediaStreamRef.current = null;
-    }
-    if (ocrTimerRef.current) { window.clearInterval(ocrTimerRef.current); ocrTimerRef.current = null; }
-    hideBanner();
-  }, [hideBanner]);
-
   const resetScanner = useCallback(() => {
     setScannedCode(null);
     // attempt counter disabled
@@ -491,6 +506,37 @@ export default function Scanner() {
     })();
   }, []);
 
+  // Load per-user count and cans when userId changes
+  useEffect(() => {
+    (async () => {
+      if (!supabase || !userId) { 
+        setUserCount(null); 
+        setUserCans(null);
+        return; 
+      }
+      try {
+        const { count, error } = await supabase
+          .from("scanned_codes")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", userId);
+        if (error) throw error;
+        setUserCount(typeof count === "number" ? count : 0);
+
+        // Load user cans
+        const { data: cans, error: cansError } = await supabase
+          .from("scanned_codes")
+          .select("id, code, created_at")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false });
+        if (cansError) throw cansError;
+        setUserCans(cans || []);
+      } catch {
+        setUserCount(null);
+        setUserCans(null);
+      }
+    })();
+  }, [userId]);
+
   const onSubmitToZyn = async () => {
     if (!scannedCode) return;
     showStatus("Opening ZYN Rewards...", "info");
@@ -510,8 +556,70 @@ export default function Scanner() {
     <div className="container">
       {supabase && (
         <div className="customize" style={{ marginBottom: 12, width: "100%", justifyContent: "center" }}>
-          <strong>Total codes scanned:&nbsp;</strong>
+          <strong>Cans Scanned:&nbsp;</strong>
           <span>{totalCount ?? "—"}</span>
+        </div>
+      )}
+      
+      {supabase && (
+        <div className="customize" style={{ marginBottom: 12, width: "100%", justifyContent: "center", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
+            <div style={{ fontWeight: 600 }}>Your cans{userCount !== null ? `: ${userCount}` : ":"}</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
+            <span style={{ opacity: 0.8, fontSize: 12 }}>Want to save your cans? give your name</span>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Enter your name"
+              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.1)", color: "#fff" }}
+            />
+            <button className="btn btn-small" onClick={async () => {
+              if (!supabase) return;
+              const name = username.trim();
+              if (!name) { showStatus("Please enter a name.", "error"); return; }
+              // Try to find
+              const { data: existing } = await supabase.from("users").select("id").eq("name", name).maybeSingle();
+              if (existing?.id) { setUserId(existing.id); showStatus(`Loaded ${name}'s cans.`, "success"); return; }
+              // Create new (handle unique violation by re-prompt)
+              const { data: created, error } = await supabase.from("users").insert({ name }).select("id").maybeSingle();
+              if (error || !created?.id) { showStatus("Name taken or cannot create. Try another.", "error"); return; }
+              setUserId(created.id);
+              showStatus(`Welcome, ${name}. Your cans will be saved.`, "success");
+            }}>Save</button>
+          </div>
+          
+          {/* User cans list */}
+          {userCans && userCans.length > 0 && (
+            <div style={{ 
+              marginTop: 12, 
+              maxHeight: "200px", 
+              overflowY: "auto", 
+              border: "1px solid rgba(255,255,255,0.2)", 
+              borderRadius: 8, 
+              padding: 8,
+              background: "rgba(255,255,255,0.05)"
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: 8, textAlign: "center" }}>Your Scanned Cans:</div>
+              {userCans.map((can) => (
+                <div key={can.id} style={{ 
+                  display: "flex", 
+                  justifyContent: "space-between", 
+                  alignItems: "center", 
+                  padding: "4px 8px", 
+                  marginBottom: 4,
+                  background: "rgba(255,255,255,0.1)",
+                  borderRadius: 4,
+                  fontSize: 12
+                }}>
+                  <div style={{ fontWeight: 500 }}>{can.code}</div>
+                  <div style={{ opacity: 0.7 }}>
+                    {new Date(can.created_at).toLocaleString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
       <div className="customize" style={{ marginBottom: 12 }}>
