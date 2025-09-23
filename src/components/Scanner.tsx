@@ -37,15 +37,7 @@ export default function Scanner() {
     setScanBanner({ msg, kind });
   }, []);
 
-  const isURL = (text: string) => {
-    try {
-      new URL(text);
-      return true;
-    } catch {
-      const t = text.toLowerCase();
-      return t.includes("http") || t.includes("www.") || /\.[a-z]{2,}$/i.test(text);
-    }
-  };
+  // isURL removed (unused)
 
   const isValidProductCode = (code: string) => {
     const clean = code.trim().replace(/\s/g, "");
@@ -66,7 +58,7 @@ export default function Scanner() {
     return !common.includes(clean.toUpperCase());
   };
 
-  const extractCodeFromURL = (url: string) => {
+  const extractCodeFromURL = useCallback((url: string) => {
     try {
       const ensure = url.startsWith("http") ? url : `https://${url}`;
       const u = new URL(ensure);
@@ -87,7 +79,9 @@ export default function Scanner() {
     } catch {
       return null;
     }
-  };
+  }, []);
+
+  // stopCamera defined later
 
   const processFoundCode = useCallback(async (code: string) => {
     // Check duplicate in Supabase (if configured)
@@ -107,7 +101,7 @@ export default function Scanner() {
           try { await navigator.clipboard.writeText(code); } catch {}
           return;
         }
-      } catch (e) {
+      } catch {
         // non-fatal; continue
       }
     }
@@ -145,32 +139,15 @@ export default function Scanner() {
           .from("scanned_codes")
           .insert({ code });
         if (!error) setTotalCount((n) => (typeof n === "number" ? n + 1 : n));
-      } catch (e) {
+      } catch {
         // ignore persistence errors for UX
       }
     }
   }, [hideBanner, showBanner, showStatus]);
 
-  const handleCodeFound = useCallback(
-    (value: string) => {
-      const clean = value.replace(/\s+/g, "");
-      if (/^[A-Za-z0-9]{6,40}$/.test(clean) && !isURL(clean)) {
-        processFoundCode(clean);
-        return;
-      }
-      if (isURL(clean)) {
-        showBanner("🔗 Found URL! Extracting code...", "info");
-        const extracted = extractCodeFromURL(clean);
-        if (extracted) processFoundCode(extracted);
-        else showStatus("No product code found in the URL path", "error");
-        return;
-      }
-      processFoundCode(clean);
-    },
-    [processFoundCode, showBanner, showStatus]
-  );
+  // handleCodeFound removed (direct flows call processFoundCode)
 
-  const readQrInViewfinderOnce = useCallback(() => {
+  const readQrInViewfinderOnce = useCallback((): { text: string } | null => {
     try {
       const viewport = viewportRef.current;
       const video = videoRef.current;
@@ -290,8 +267,10 @@ export default function Scanner() {
       }
 
       // If still unknown, estimate from capabilities (approx sensor/stream max)
-      if (!mpNumber && track && typeof (track as any).getCapabilities === "function") {
-        const caps: any = (track as any).getCapabilities();
+      if (!mpNumber && track) {
+        type TrackWithCaps = MediaStreamTrack & { getCapabilities?: () => { width?: { max?: number }, height?: { max?: number } } };
+        const t = track as TrackWithCaps;
+        const caps = typeof t.getCapabilities === "function" ? t.getCapabilities() : undefined;
         const wMax = caps?.width?.max;
         const hMax = caps?.height?.max;
         if (typeof wMax === "number" && typeof hMax === "number" && wMax > 0 && hMax > 0) {
@@ -319,7 +298,7 @@ export default function Scanner() {
     }
   }, []);
 
-  const startCamera = useCallback(async () => {
+  const startCameraLegacy = useCallback(async () => {
     try {
       showStatus("Requesting camera access...", "info");
       if (location.protocol !== "https:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
@@ -330,9 +309,10 @@ export default function Scanner() {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const inputs = devices.filter((d) => d.kind === "videoinput");
       const back = inputs.find((d) => /back|rear|environment/i.test(d.label));
+      const envFacing: ConstrainDOMString = "environment";
       const constraints: MediaStreamConstraints = back
-        ? { video: { deviceId: { exact: back.deviceId } as any } }
-        : { video: { facingMode: { ideal: "environment" } as any } };
+        ? { video: { deviceId: { exact: back.deviceId } } }
+        : { video: { facingMode: { ideal: envFacing } } };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       mediaStreamRef.current = stream;
       if (!viewportRef.current) return;
@@ -363,7 +343,7 @@ export default function Scanner() {
         if (polls >= 30) { // ~6 seconds at 200ms
           if (mpPollRef.current) { window.clearInterval(mpPollRef.current); mpPollRef.current = null; }
         }
-      }, 200) as unknown as number;
+      }, 200) as number;
       // Update MP again when metadata/size known
       video.onloadedmetadata = () => updateMp();
       // Some browsers fire resize when dimensions change
@@ -381,8 +361,8 @@ export default function Scanner() {
         if (!videoRef.current) return;
         const qr = readQrInViewfinderOnce();
         let printed: string | null = null;
-        if (qr && (qr as any).text) {
-          const urlCode = extractCodeFromURL((qr as any).text) || null;
+        if (qr && qr.text) {
+          const urlCode = extractCodeFromURL(qr.text) || null;
           printed = await ocrUnderViewfinderOnce(true);
           if (printed) processFoundCode(printed);
           else if (urlCode) processFoundCode(urlCode);
@@ -391,25 +371,91 @@ export default function Scanner() {
           if (printed) processFoundCode(printed);
         }
         // attempt counter disabled
-      }, 1200) as unknown as number;
-    } catch (e: any) {
+      }, 1200) as number;
+    } catch {
       showStatus("Camera not available. Please use manual entry.", "error");
-      console.error(e);
+      // console.error(e);
+    }
+  }, [extractCodeFromURL, ocrUnderViewfinderOnce, processFoundCode, readQrInViewfinderOnce, showBanner, showStatus, updateMp, waitForVideoDims]);
+
+  const startCamera = useCallback(async () => {
+    try {
+      showStatus("Requesting camera access...", "info");
+      if (location.protocol !== "https:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+        showStatus("Camera requires HTTPS. Use your tunnel link.", "error");
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera not supported on this device");
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const inputs = devices.filter((d) => d.kind === "videoinput");
+      const back = inputs.find((d) => /back|rear|environment/i.test(d.label));
+      const envFacing: ConstrainDOMString = "environment";
+      const constraints: MediaStreamConstraints = back
+        ? { video: { deviceId: { exact: back.deviceId } } }
+        : { video: { facingMode: { ideal: envFacing } } };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      mediaStreamRef.current = stream;
+      if (!viewportRef.current) return;
+      if (!videoRef.current) {
+        const v = document.createElement("video");
+        v.setAttribute("playsinline", "true");
+        v.muted = true;
+        v.autoplay = true;
+        v.style.width = "100%";
+        v.style.height = "100%";
+        viewportRef.current.innerHTML = "";
+        viewportRef.current.appendChild(v);
+        videoRef.current = v;
+      }
+      const video = videoRef.current!;
+      video.srcObject = stream;
+      updateMp();
+      await video.play();
+      await waitForVideoDims();
+      updateMp();
+      if (mpPollRef.current) { window.clearInterval(mpPollRef.current); mpPollRef.current = null; }
+      let polls = 0;
+      mpPollRef.current = window.setInterval(() => {
+        polls += 1;
+        updateMp();
+        if (polls >= 30) { if (mpPollRef.current) { window.clearInterval(mpPollRef.current); mpPollRef.current = null; } }
+      }, 200) as number;
+      video.onloadedmetadata = () => updateMp();
+      video.onresize = () => updateMp();
+      setIsScanning(true);
+      showStatus("Camera active - align code under QR in window", "success");
+      showBanner("📷 Scanning for code under QR...", "info");
+      window.setTimeout(updateMp, 800);
+      if (ocrTimerRef.current) {
+        window.clearInterval(ocrTimerRef.current);
+        ocrTimerRef.current = null;
+      }
+      ocrTimerRef.current = window.setInterval(async () => {
+        updateMp();
+        if (!videoRef.current) return;
+        const qr = readQrInViewfinderOnce();
+        let printed: string | null = null;
+        if (qr && qr.text) {
+          const urlCode = extractCodeFromURL(qr.text) || null;
+          printed = await ocrUnderViewfinderOnce(true);
+          if (printed) processFoundCode(printed); else if (urlCode) processFoundCode(urlCode);
+        } else {
+          printed = await ocrUnderViewfinderOnce(true);
+          if (printed) processFoundCode(printed);
+        }
+      }, 1200) as number;
+    } catch {
+      showStatus("Camera not available. Please use manual entry.", "error");
     }
   }, [extractCodeFromURL, ocrUnderViewfinderOnce, processFoundCode, readQrInViewfinderOnce, showBanner, showStatus, updateMp, waitForVideoDims]);
 
   const stopCamera = useCallback(() => {
     setIsScanning(false);
     if (mediaStreamRef.current) {
-      try {
-        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-      } catch {}
+      try { mediaStreamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
       mediaStreamRef.current = null;
     }
-    if (ocrTimerRef.current) {
-      window.clearInterval(ocrTimerRef.current);
-      ocrTimerRef.current = null;
-    }
+    if (ocrTimerRef.current) { window.clearInterval(ocrTimerRef.current); ocrTimerRef.current = null; }
     hideBanner();
   }, [hideBanner]);
 
@@ -453,7 +499,7 @@ export default function Scanner() {
       const zynUrl = "https://us.zyn.com/ZYNRewards";
       window.open(zynUrl, "_blank");
       showStatus("Code copied! Paste in ZYN Rewards form.", "success");
-    } catch (e) {
+    } catch {
       showStatus(`Error opening site. Your code is: ${scannedCode}`, "error");
     }
   };
