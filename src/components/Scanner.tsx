@@ -509,10 +509,10 @@ export default function Scanner() {
     })();
   }, []);
 
-  // Apply initial CSS var from default color once on mount
+  // Apply CSS var whenever userColor changes
   useEffect(() => {
     document.documentElement.style.setProperty("--can-green", userColor);
-  }, []);
+  }, [userColor]);
 
   // Load per-user count and cans when userId changes
   useEffect(() => {
@@ -561,11 +561,13 @@ export default function Scanner() {
 
   // Persist user color when it changes and a user is selected
   useEffect(() => {
-    if (!supabase || !userId) return;
+    const sb = supabase;
+    const uid = userId;
+    if (!sb || !uid) return;
     const colorToSave = userColor;
     const t = window.setTimeout(async () => {
       try {
-        await supabase.from("users").update({ color: colorToSave }).eq("id", userId);
+        await sb.from("users").update({ color: colorToSave }).eq("id", uid);
       } catch {}
     }, 300);
     return () => window.clearTimeout(t);
