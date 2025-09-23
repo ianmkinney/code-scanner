@@ -1,36 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## ZYN Scanner (Next.js)
 
-## Getting Started
+This app replicates the standalone `index.html` ZYN scanner UI/logic in a componentized Next.js app. It uses the device camera, scans QR in the viewfinder, and performs OCR below the QR to extract the case-sensitive code. Codes are copied to clipboard and you can jump to ZYN Rewards.
 
-First, run the development server:
+### Requirements
+- Node 18+
+- Camera-enabled device (mobile recommended)
 
+### Install
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Run locally
+```bash
+npm run dev
+```
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Camera access requires HTTPS on mobile. Use a tunnel like ngrok.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Expose with ngrok (for mobile HTTPS)
+1. Install ngrok and sign in
+2. Run your dev server: `npm run dev`
+3. In another shell:
+```bash
+ngrok http 3000
+```
+4. Open the `https://` forwarding URL on your phone. Camera should work.
 
-## Learn More
+### Features
+- Viewfinder aligned inside a stylized can puck
+- Auto QR detection within the viewfinder
+- OCR pass beneath the QR to preserve code casing
+- Clipboard copy + quick open to ZYN Rewards
+- Optional Supabase integration to de-duplicate and store scanned codes
 
-To learn more about Next.js, take a look at the following resources:
+### Tech
+- React 19, Next 15 App Router
+- `jsqr` for QR detection
+- `tesseract.js` for OCR
+- `@supabase/supabase-js` for persistence (optional)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Source layout
+- `src/components/Scanner.tsx`: main scanner UI + logic
+- `src/app/globals.css`: styles ported from the HTML
+- `src/app/page.tsx`: renders the scanner
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Environment (optional: Supabase)
+Create a Supabase project (free tier) and a table:
 
-## Deploy on Vercel
+```sql
+create table if not exists public.scanned_codes (
+  id uuid primary key default gen_random_uuid(),
+  code text not null unique,
+  created_at timestamp with time zone default now()
+);
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Add env vars in `.env.local`:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+NEXT_PUBLIC_SUPABASE_URL=...your supabase url...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...anon key...
+```
+
+The app will auto-check for duplicates and insert new codes when configured.
+
+For more developer docs and component pseudo code, see the Obsidian notes in `README/`.
