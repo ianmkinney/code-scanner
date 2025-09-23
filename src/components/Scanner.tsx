@@ -19,6 +19,7 @@ export default function Scanner() {
   const [userId, setUserId] = useState<string | null>(null);
   const [userCount, setUserCount] = useState<number | null>(null);
   const [userCans, setUserCans] = useState<Array<{id: string, code: string, created_at: string}> | null>(null);
+  const [userColor, setUserColor] = useState<string>("#00cc6a");
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -27,7 +28,9 @@ export default function Scanner() {
   const mpPollRef = useRef<number | null>(null);
 
   const handleColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    document.documentElement.style.setProperty("--can-green", e.target.value);
+    const newColor = e.target.value;
+    setUserColor(newColor);
+    document.documentElement.style.setProperty("--can-green", newColor);
   };
 
   const showBanner = useCallback((msg: string, kind: StatusKind = "info") => {
@@ -506,12 +509,20 @@ export default function Scanner() {
     })();
   }, []);
 
+  // Apply initial CSS var from default color once on mount
+  useEffect(() => {
+    document.documentElement.style.setProperty("--can-green", userColor);
+  }, []);
+
   // Load per-user count and cans when userId changes
   useEffect(() => {
     (async () => {
       if (!supabase || !userId) { 
         setUserCount(null); 
         setUserCans(null);
+        // reset to default color when no user selected
+        setUserColor("#00cc6a");
+        document.documentElement.style.setProperty("--can-green", "#00cc6a");
         return; 
       }
       try {
@@ -530,12 +541,35 @@ export default function Scanner() {
           .order("created_at", { ascending: false });
         if (cansError) throw cansError;
         setUserCans(cans || []);
+
+        // Load user color if available
+        const { data: userRow } = await supabase
+          .from("users")
+          .select("color")
+          .eq("id", userId)
+          .maybeSingle();
+        if (userRow?.color && typeof userRow.color === "string") {
+          setUserColor(userRow.color);
+          document.documentElement.style.setProperty("--can-green", userRow.color);
+        }
       } catch {
         setUserCount(null);
         setUserCans(null);
       }
     })();
   }, [userId]);
+
+  // Persist user color when it changes and a user is selected
+  useEffect(() => {
+    if (!supabase || !userId) return;
+    const colorToSave = userColor;
+    const t = window.setTimeout(async () => {
+      try {
+        await supabase.from("users").update({ color: colorToSave }).eq("id", userId);
+      } catch {}
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [userColor, userId]);
 
   const onSubmitToZyn = async () => {
     if (!scannedCode) return;
@@ -579,12 +613,24 @@ export default function Scanner() {
               const name = username.trim();
               if (!name) { showStatus("Please enter a name.", "error"); return; }
               // Try to find
-              const { data: existing } = await supabase.from("users").select("id").eq("name", name).maybeSingle();
-              if (existing?.id) { setUserId(existing.id); showStatus(`Loaded ${name}'s cans.`, "success"); return; }
+              const { data: existing } = await supabase.from("users").select("id, color").eq("name", name).maybeSingle();
+              if (existing?.id) { 
+                setUserId(existing.id);
+                if (existing.color && typeof existing.color === "string") {
+                  setUserColor(existing.color);
+                  document.documentElement.style.setProperty("--can-green", existing.color);
+                }
+                showStatus(`Loaded ${name}'s cans.`, "success"); 
+                return; 
+              }
               // Create new (handle unique violation by re-prompt)
-              const { data: created, error } = await supabase.from("users").insert({ name }).select("id").maybeSingle();
+              const { data: created, error } = await supabase.from("users").insert({ name, color: userColor }).select("id, color").maybeSingle();
               if (error || !created?.id) { showStatus("Name taken or cannot create. Try another.", "error"); return; }
               setUserId(created.id);
+              if (created.color && typeof created.color === "string") {
+                setUserColor(created.color);
+                document.documentElement.style.setProperty("--can-green", created.color);
+              }
               showStatus(`Welcome, ${name}. Your cans will be saved.`, "success");
             }}>Save</button>
           </div>
@@ -624,7 +670,7 @@ export default function Scanner() {
       )}
       <div className="customize" style={{ marginBottom: 12 }}>
         <label htmlFor="colorPicker">Customize your can:</label>
-        <input id="colorPicker" type="color" defaultValue="#00cc6a" onChange={handleColorChange} />
+        <input id="colorPicker" type="color" value={userColor} onChange={handleColorChange} />
         <button id="testMock" className="btn btn-small" onClick={mockTest} style={{ marginLeft: "auto" }}>
           Test Mock Code
         </button>
