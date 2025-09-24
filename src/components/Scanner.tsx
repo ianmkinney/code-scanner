@@ -33,6 +33,14 @@ export default function Scanner() {
     document.documentElement.style.setProperty("--can-green", newColor);
   };
 
+  // Update title text shadow when user color changes
+  useEffect(() => {
+    const titleElement = document.querySelector('.app-title') as HTMLElement;
+    if (titleElement) {
+      titleElement.style.textShadow = `0 0 30px ${userColor}50`;
+    }
+  }, [userColor]);
+
   const showBanner = useCallback((msg: string, kind: StatusKind = "info") => {
     setScanBanner({ msg, kind });
   }, []);
@@ -148,28 +156,36 @@ export default function Scanner() {
     } catch {}
     window.setTimeout(() => hideBanner(), 3500);
 
-    // Save new code to Supabase (if configured)
-    if (supabase) {
-      try {
-        const insertPayload: { code: string; user_id?: string } = { code };
-        if (userId) insertPayload.user_id = userId;
-        const { error } = await supabase
-          .from("scanned_codes")
-          .insert(insertPayload);
-        if (!error) setTotalCount((n) => (typeof n === "number" ? n + 1 : n));
-        if (!error && userId) {
+    // Save new code via secure API route
+    try {
+      const headers: HeadersInit = { 'Content-Type': 'application/json' };
+      if (userId) {
+        headers['X-User-ID'] = userId;
+      }
+      
+      const response = await fetch('/api/save-code', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ code })
+      });
+      
+      if (response.ok) {
+        setTotalCount((n) => (typeof n === "number" ? n + 1 : n));
+        if (userId) {
           setUserCount((n) => (typeof n === "number" ? n + 1 : n));
           // Refresh user cans list
-          const { data: cans } = await supabase
-            .from("scanned_codes")
-            .select("id, code, created_at")
-            .eq("user_id", userId)
-            .order("created_at", { ascending: false });
-          setUserCans(cans || []);
+          if (supabase) {
+            const { data: cans } = await supabase
+              .from("scanned_codes")
+              .select("id, code, created_at")
+              .eq("user_id", userId)
+              .order("created_at", { ascending: false });
+            setUserCans(cans || []);
+          }
         }
-      } catch {
-        // ignore persistence errors for UX
       }
+    } catch {
+      // ignore persistence errors for UX
     }
   }, [hideBanner, showBanner, showStatus, stopCamera, userId]);
 
@@ -542,16 +558,7 @@ export default function Scanner() {
         if (cansError) throw cansError;
         setUserCans(cans || []);
 
-        // Load user color if available
-        const { data: userRow } = await supabase
-          .from("users")
-          .select("color")
-          .eq("id", userId)
-          .maybeSingle();
-        if (userRow?.color && typeof userRow.color === "string") {
-          setUserColor(userRow.color);
-          document.documentElement.style.setProperty("--can-green", userRow.color);
-        }
+        // Note: User color is loaded during login, not here to avoid overriding
       } catch {
         setUserCount(null);
         setUserCans(null);
@@ -590,113 +597,32 @@ export default function Scanner() {
 
   return (
     <div className="container">
+      {/* Cans Scanned Counter */}
       {supabase && (
-        <div className="customize" style={{ marginBottom: 12, width: "100%", justifyContent: "center" }}>
+        <div className="customize" style={{ 
+          marginBottom: 12, 
+          width: "100%", 
+          justifyContent: "center",
+          animation: "fadeInDown 0.6s ease-out"
+        }}>
           <strong>Cans Scanned:&nbsp;</strong>
           <span>{totalCount ?? "—"}</span>
         </div>
       )}
-      
-      {supabase && (
-        <div className="customize" style={{ marginBottom: 12, width: "100%", justifyContent: "center", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
-            <div style={{ fontWeight: 600 }}>Your cans{userCount !== null ? `: ${userCount}` : ":"}</div>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
-            <span style={{ opacity: 0.8, fontSize: 12 }}>Want to save your cans? give your name</span>
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Enter your name"
-              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.1)", color: "#fff" }}
-            />
-            <button className="btn btn-small" onClick={async () => {
-              if (!supabase) return;
-              const name = username.trim();
-              if (!name) { showStatus("Please enter a name.", "error"); return; }
-              // Try to find
-              const { data: existing } = await supabase.from("users").select("id, color").eq("name", name).maybeSingle();
-              if (existing?.id) { 
-                setUserId(existing.id);
-                if (existing.color && typeof existing.color === "string") {
-                  setUserColor(existing.color);
-                  document.documentElement.style.setProperty("--can-green", existing.color);
-                }
-                showStatus(`Loaded ${name}'s cans.`, "success"); 
-                return; 
-              }
-              // Create new (handle unique violation by re-prompt)
-              const { data: created, error } = await supabase.from("users").insert({ name, color: userColor }).select("id, color").maybeSingle();
-              if (error || !created?.id) { showStatus("Name taken or cannot create. Try another.", "error"); return; }
-              setUserId(created.id);
-              if (created.color && typeof created.color === "string") {
-                setUserColor(created.color);
-                document.documentElement.style.setProperty("--can-green", created.color);
-              }
-              showStatus(`Welcome, ${name}. Your cans will be saved.`, "success");
-            }}>Save</button>
-          </div>
-          
-          {/* User cans list */}
-          {userCans && userCans.length > 0 && (
-            <div style={{ 
-              marginTop: 12, 
-              maxHeight: "200px", 
-              overflowY: "auto", 
-              border: "1px solid rgba(255,255,255,0.2)", 
-              borderRadius: 8, 
-              padding: 8,
-              background: "rgba(255,255,255,0.05)"
-            }}>
-              <div style={{ fontWeight: 600, marginBottom: 8, textAlign: "center" }}>Your Scanned Cans:</div>
-              {userCans.map((can) => (
-                <div key={can.id} style={{ 
-                  display: "flex", 
-                  justifyContent: "space-between", 
-                  alignItems: "center", 
-                  padding: "4px 8px", 
-                  marginBottom: 4,
-                  background: "rgba(255,255,255,0.1)",
-                  borderRadius: 4,
-                  fontSize: 12
-                }}>
-                  <div style={{ fontWeight: 500 }}>{can.code}</div>
-                  <div style={{ opacity: 0.7 }}>
-                    {new Date(can.created_at).toLocaleString()}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-      <div className="customize" style={{ marginBottom: 12 }}>
-        <label htmlFor="colorPicker">Customize your can:</label>
-        <input id="colorPicker" type="color" value={userColor} onChange={handleColorChange} />
-        <button id="testMock" className="btn btn-small" onClick={mockTest} style={{ marginLeft: "auto" }}>
-          Test Mock Code
-        </button>
-      </div>
 
-      <div id="scanFeedback" className={`scan-feedback ${scanBanner ? "show " + scanBanner.kind : ""}`} style={{ pointerEvents: "none" }}>
-        {scanBanner?.msg}
-      </div>
+      {/* Can Scan Title */}
+      <h1 
+        className="app-title"
+        style={{ 
+          '--can-green': userColor,
+          textShadow: `0 0 30px ${userColor}50`
+        } as React.CSSProperties}
+      >
+        Can Scan
+      </h1>
 
-      <div id="resultSection" className={`result-section ${scannedCode ? "" : "hidden"}`}>
-        <h3>Found Code:</h3>
-        <div id="codeDisplay" className="code-display">{scannedCode || ""}</div>
-        <div id="clipboardNotification" className="clipboard-notification" style={{ display: scannedCode ? "block" : "none" }}>
-          📋 Code copied to clipboard! Paste into ZYN Rewards for your points.
-        </div>
-        <button id="submitCode" className="btn btn-primary" style={{ width: "100%", marginBottom: 10 }} onClick={onSubmitToZyn}>
-          🌐 Go to ZYN Rewards
-        </button>
-        <button id="scanAgain" className="btn btn-secondary" style={{ width: "100%" }} onClick={resetScanner}>
-          🔄 Scan Another
-        </button>
-      </div>
-
-      <div className="scan-section">
+      {/* Scanner Section - Moved to top */}
+      <div className="scan-section" style={{ animation: "flipIn 1.2s ease-out" }}>
         <div className="puck" id="puck" title="Tap to start camera" onClick={startCamera}>
           <div className="puck-ring" />
           <div className="puck-green">
@@ -715,7 +641,179 @@ export default function Scanner() {
         </div>
       </div>
 
-      <div className="instructions-compact">
+      {/* Scan Feedback */}
+      <div id="scanFeedback" className={`scan-feedback ${scanBanner ? "show " + scanBanner.kind : ""}`} style={{ pointerEvents: "none" }}>
+        {scanBanner?.msg}
+      </div>
+
+      {/* Result Section */}
+      <div id="resultSection" className={`result-section ${scannedCode ? "" : "hidden"}`} style={{ animation: "slideInUp 0.5s ease-out" }}>
+        <h3>Found Code:</h3>
+        <div id="codeDisplay" className="code-display">{scannedCode || ""}</div>
+        <div id="clipboardNotification" className="clipboard-notification" style={{ display: scannedCode ? "block" : "none" }}>
+          📋 Code copied to clipboard! Paste into ZYN Rewards for your points.
+        </div>
+        <button id="submitCode" className="btn btn-primary" style={{ width: "100%", marginBottom: 10 }} onClick={onSubmitToZyn}>
+          🌐 Go to ZYN Rewards
+        </button>
+        <button id="scanAgain" className="btn btn-secondary" style={{ width: "100%" }} onClick={resetScanner}>
+          🔄 Scan Another
+        </button>
+      </div>
+
+      {/* User Management Section */}
+      {supabase && (
+        <div className="customize" style={{ 
+          marginBottom: 12, 
+          width: "100%", 
+          justifyContent: "center", 
+          flexDirection: "column", 
+          gap: 8,
+          animation: "fadeInUp 1s ease-out"
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
+            <div style={{ fontWeight: 600 }}>Your cans{userCount !== null ? `: ${userCount}` : ":"}</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
+            <span style={{ opacity: 0.8, fontSize: 12 }}>Want to save your cans? give your name</span>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Enter your name"
+              style={{ 
+                padding: "6px 10px", 
+                borderRadius: 8, 
+                border: "1px solid rgba(255,255,255,0.3)", 
+                background: "rgba(255,255,255,0.1)", 
+                color: "#fff",
+                transition: "all 0.3s ease"
+              }}
+            />
+            <button className="btn btn-small" onClick={async () => {
+              if (!supabase) return;
+              const name = username.trim();
+              if (!name) { showStatus("Please enter a name.", "error"); return; }
+              // Try to find
+              const { data: existing } = await supabase.from("users").select("id, color").eq("name", name).maybeSingle();
+              if (existing?.id) { 
+                console.log("👤 Loading existing user:", existing);
+                setUserId(existing.id);
+                const colorToUse = existing.color && typeof existing.color === "string" ? existing.color : "#00cc6a";
+                setUserColor(colorToUse);
+                document.documentElement.style.setProperty("--can-green", colorToUse);
+                showStatus(`Loaded ${name}'s cans.`, "success"); 
+                return; 
+              }
+              // Create new (handle unique violation by re-prompt)
+              console.log("🆕 Creating new user:", { name, color: userColor });
+              const { data: created, error } = await supabase.from("users").insert({ name, color: userColor }).select("id, color").maybeSingle();
+              console.log("📊 User creation response:", { created, error });
+              if (error || !created?.id) { 
+                console.error("❌ Failed to create user:", error);
+                showStatus("Name taken or cannot create. Try another.", "error"); 
+                return; 
+              }
+              setUserId(created.id);
+              const colorToUse = created.color && typeof created.color === "string" ? created.color : userColor;
+              setUserColor(colorToUse);
+              document.documentElement.style.setProperty("--can-green", colorToUse);
+              showStatus(`Welcome, ${name}. Your cans will be saved.`, "success");
+            }}>
+              Save
+            </button>
+          </div>
+          
+          {/* User cans list */}
+          {userCans && userCans.length > 0 && (
+            <div style={{ 
+              marginTop: 12, 
+              maxHeight: "200px", 
+              overflowY: "auto", 
+              border: "1px solid rgba(255,255,255,0.2)", 
+              borderRadius: 8, 
+              padding: 8,
+              background: "rgba(255,255,255,0.05)",
+              animation: "slideInUp 0.6s ease-out"
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: 8, textAlign: "center" }}>Your Scanned Cans:</div>
+              {userCans.map((can, index) => (
+                <div key={can.id} style={{ 
+                  display: "flex", 
+                  justifyContent: "space-between", 
+                  alignItems: "center", 
+                  padding: "4px 8px", 
+                  marginBottom: 4,
+                  background: "rgba(255,255,255,0.1)",
+                  borderRadius: 4,
+                  fontSize: 12,
+                  animation: `fadeInUp 0.4s ease-out ${index * 0.1}s both`
+                }}>
+                  <div style={{ fontWeight: 500 }}>{can.code}</div>
+                  <div style={{ opacity: 0.7 }}>
+                    {new Date(can.created_at).toLocaleString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Color Customization */}
+      <div className="customize" style={{ 
+        marginBottom: 12,
+        animation: "fadeInUp 1.2s ease-out"
+      }}>
+        <label htmlFor="colorPicker">Customize your can:</label>
+        <input 
+          id="colorPicker" 
+          type="color" 
+          value={userColor} 
+          onChange={handleColorChange}
+          style={{ transition: "all 0.3s ease" }}
+        />
+        {userId && (
+          <button 
+            className="btn btn-small" 
+            onClick={async () => {
+              if (!userId) {
+                showStatus("Not logged in.", "error");
+                return;
+              }
+              
+              try {
+                const response = await fetch('/api/save-color', {
+                  method: 'POST',
+                  headers: { 
+                    'Content-Type': 'application/json',
+                    'X-User-ID': userId
+                  },
+                  body: JSON.stringify({ color: userColor })
+                });
+                
+                if (response.ok) {
+                  showStatus("Color saved!", "success");
+                } else {
+                  const error = await response.json();
+                  showStatus(`Failed to save color: ${error.error}`, "error");
+                }
+              } catch (err) {
+                showStatus("Failed to save color.", "error");
+                console.error("Color save error:", err);
+              }
+            }}
+            style={{ marginLeft: 8 }}
+          >
+            Save Color
+          </button>
+        )}
+        <button id="testMock" className="btn btn-small" onClick={mockTest} style={{ marginLeft: "auto" }}>
+          Test Mock Code
+        </button>
+      </div>
+
+      {/* Instructions */}
+      <div className="instructions-compact" style={{ animation: "fadeInUp 1.4s ease-out" }}>
         <ul style={{ textAlign: "left", margin: 0, paddingLeft: 18, listStyleType: "disc" }}>
           <li>Line up the QR code and the printed code beneath it inside the frame.</li>
           <br />
