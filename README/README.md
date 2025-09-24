@@ -2,7 +2,7 @@
 tags: [overview]
 ---
 
-# ZYN Scanner Docs
+#  Scanner Docs
 
 See:
 - [[COMPONENTS]] for component breakdown and pseudo code

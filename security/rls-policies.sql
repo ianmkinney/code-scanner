@@ -1,7 +1,7 @@
 -- =============================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- =============================================
--- This file contains comprehensive RLS policies for the ZYN Scanner app
+-- This file contains comprehensive RLS policies for the  Scanner app
 -- Run these commands in your Supabase SQL Editor
 
 -- =============================================

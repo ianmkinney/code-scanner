@@ -1,8 +1,8 @@
-# ZYN Scanner - Security Architecture
+#  Scanner - Security Architecture
 
 ## 🔒 Overview
 
-The ZYN Scanner application implements a multi-layered security architecture to protect user data and prevent abuse. This document outlines the security measures implemented across authentication, authorization, rate limiting, and data protection.
+The  Scanner application implements a multi-layered security architecture to protect user data and prevent abuse. This document outlines the security measures implemented across authentication, authorization, rate limiting, and data protection.
 
 ## 🛡️ Security Layers
 

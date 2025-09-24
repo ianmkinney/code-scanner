@@ -74,7 +74,7 @@ export default function Scanner() {
     
     // Check against common non-code words that might be detected by OCR
     const common = [
-      "CODE", "PRODUCT", "ITEM", "SKU", "BARCODE", "SCAN", "ENTER", "REWARDS", "ZYN",
+      "CODE", "PRODUCT", "ITEM", "SKU", "BARCODE", "SCAN", "ENTER", "REWARDS", "",
       "REWARD", "POINTS", "SCANNING", "DETECTED", "FOUND", "SUCCESS", "ERROR", "INVALID",
       "VALID", "CHECK", "VERIFY", "CONFIRM", "ACCEPT", "REJECT", "CANCEL", "RETRY",
       "AGAIN", "NEXT", "PREVIOUS", "BACK", "FORWARD", "CONTINUE", "STOP", "START",
@@ -639,14 +639,14 @@ export default function Scanner() {
   // Persist user color when it changes and a user is selected
   // (Removed client-side direct save to avoid conflicts with API auth flow)
 
-  const onSubmitToZyn = async () => {
+  const onSubmitTo = async () => {
     if (!scannedCode) return;
-    showStatus("Opening ZYN Rewards...", "info");
+    showStatus("Opening  Rewards...", "info");
     try {
       await navigator.clipboard.writeText(scannedCode);
-      const zynUrl = "https://us.zyn.com/ZYNRewards";
-      window.open(zynUrl, "_blank");
-      showStatus("Code copied! Paste in ZYN Rewards form.", "success");
+      const Url = "https://us..com/Rewards";
+      window.open(Url, "_blank");
+      showStatus("Code copied! Paste in  Rewards form.", "success");
     } catch {
       showStatus(`Error opening site. Your code is: ${scannedCode}`, "error");
     }
@@ -709,10 +709,10 @@ export default function Scanner() {
         <h3>Found Code:</h3>
         <div id="codeDisplay" className="code-display">{scannedCode || ""}</div>
         <div id="clipboardNotification" className="clipboard-notification" style={{ display: scannedCode ? "block" : "none" }}>
-          📋 Code copied to clipboard! Paste into ZYN Rewards for your points.
+          📋 Code copied to clipboard! Paste into  Rewards for your points.
         </div>
-        <button id="submitCode" className="btn btn-primary" style={{ width: "100%", marginBottom: 10 }} onClick={onSubmitToZyn}>
-          🌐 Go to ZYN Rewards
+        <button id="submitCode" className="btn btn-primary" style={{ width: "100%", marginBottom: 10 }} onClick={onSubmitTo}>
+          🌐 Go to  Rewards
         </button>
         <button id="scanAgain" className="btn btn-secondary" style={{ width: "100%" }} onClick={resetScanner}>
           🔄 Scan Another
@@ -875,7 +875,7 @@ export default function Scanner() {
           <br />
           <li>The app auto-detects when both are clear and reads the printed code.</li>
           <br />
-          <li>Log in to ZYN Rewards once and keep the tab open for quick entry.</li>
+          <li>Log in to  Rewards once and keep the tab open for quick entry.</li>
           <br />
           <li>Scan multiple cans; codes are copied to your clipboard automatically.</li>
         </ul>

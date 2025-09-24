@@ -1,6 +1,6 @@
-## ZYN Scanner (Next.js)
+##  Scanner (Next.js)
 
-This app replicates the standalone `index.html` ZYN scanner UI/logic in a componentized Next.js app. It uses the device camera, scans QR in the viewfinder, and performs OCR below the QR to extract the case-sensitive code. Codes are copied to clipboard and you can jump to ZYN Rewards.
+This app replicates the standalone `index.html`  scanner UI/logic in a componentized Next.js app. It uses the device camera, scans QR in the viewfinder, and performs OCR below the QR to extract the case-sensitive code. Codes are copied to clipboard and you can jump to  Rewards.
 
 ### Requirements
 - Node 18+
@@ -32,7 +32,7 @@ ngrok http 3000
 - Viewfinder aligned inside a stylized can puck
 - Auto QR detection within the viewfinder
 - OCR pass beneath the QR to preserve code casing
-- Clipboard copy + quick open to ZYN Rewards
+- Clipboard copy + quick open to  Rewards
 - Optional Supabase integration to de-duplicate and store scanned codes
 
 ### Tech
