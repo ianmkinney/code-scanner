@@ -735,6 +735,7 @@ export default function Scanner() {
           <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
             <span style={{ opacity: 0.8, fontSize: 12 }}>Want to save your cans? give your name</span>
             <input
+              suppressHydrationWarning
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="Enter your name"
