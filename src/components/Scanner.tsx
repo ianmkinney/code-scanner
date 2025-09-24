@@ -74,7 +74,7 @@ export default function Scanner() {
     
     // Check against common non-code words that might be detected by OCR
     const common = [
-      "CODE", "PRODUCT", "ITEM", "SKU", "BARCODE", "SCAN", "ENTER", "REWARDS", "",
+      "CODE", "PRODUCT", "ITEM", "SKU", "BARCODE", "SCAN", "ENTER", "REWARDS", "ZYN",
       "REWARD", "POINTS", "SCANNING", "DETECTED", "FOUND", "SUCCESS", "ERROR", "INVALID",
       "VALID", "CHECK", "VERIFY", "CONFIRM", "ACCEPT", "REJECT", "CANCEL", "RETRY",
       "AGAIN", "NEXT", "PREVIOUS", "BACK", "FORWARD", "CONTINUE", "STOP", "START",
