@@ -56,21 +56,77 @@ export default function Scanner() {
 
   const isValidProductCode = (code: string) => {
     const clean = code.trim().replace(/\s/g, "");
+    
+    // Basic length check
     if (clean.length < 6 || clean.length > 25) return false;
+    
+    // Must be alphanumeric only
     if (!/^[A-Za-z0-9]+$/.test(clean)) return false;
+    
+    // Cannot be all numbers
     if (/^\d+$/.test(clean)) return false;
+    
+    // Cannot be all letters
+    if (/^[A-Za-z]+$/.test(clean)) return false;
+    
+    // Must have at least one letter and one number
+    if (!/[A-Za-z]/.test(clean) || !/\d/.test(clean)) return false;
+    
+    // Check against common non-code words that might be detected by OCR
     const common = [
-      "CODE",
-      "PRODUCT",
-      "ITEM",
-      "SKU",
-      "BARCODE",
-      "SCAN",
-      "ENTER",
-      "REWARDS",
-      "ZYN",
+      "CODE", "PRODUCT", "ITEM", "SKU", "BARCODE", "SCAN", "ENTER", "REWARDS", "ZYN",
+      "REWARD", "POINTS", "SCANNING", "DETECTED", "FOUND", "SUCCESS", "ERROR", "INVALID",
+      "VALID", "CHECK", "VERIFY", "CONFIRM", "ACCEPT", "REJECT", "CANCEL", "RETRY",
+      "AGAIN", "NEXT", "PREVIOUS", "BACK", "FORWARD", "CONTINUE", "STOP", "START",
+      "BEGIN", "END", "FINISH", "COMPLETE", "DONE", "READY", "WAIT", "LOADING",
+      "PROCESSING", "SCANNED", "RECOGNIZED", "IDENTIFIED", "LOCATED", "POSITIONED",
+      "ALIGNED", "CENTERED", "FOCUSED", "CLEAR", "BLURRY", "DARK", "LIGHT", "BRIGHT",
+      "DIM", "VISIBLE", "HIDDEN", "SHOWN", "DISPLAYED", "PRINTED", "TEXT", "LABEL",
+      "TAG", "STICKER", "MARKER", "SIGN", "SYMBOL", "ICON", "IMAGE", "PICTURE",
+      "PHOTO", "GRAPHIC", "LOGO", "BRAND", "COMPANY", "MANUFACTURER", "MAKER",
+      "CREATOR", "PRODUCER", "SUPPLIER", "VENDOR", "DISTRIBUTOR", "RETAILER",
+      "STORE", "SHOP", "MARKET", "PLACE", "LOCATION", "ADDRESS", "SITE", "WEB",
+      "ONLINE", "DIGITAL", "VIRTUAL", "REMOTE", "LOCAL", "GLOBAL", "WORLDWIDE",
+      "INTERNATIONAL", "NATIONAL", "REGIONAL", "CITY", "STATE", "COUNTRY", "NATION",
+      "WORLD", "EARTH", "PLANET", "UNIVERSE", "SPACE", "TIME", "DATE", "YEAR",
+      "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "MOMENT", "INSTANT", "NOW",
+      "TODAY", "YESTERDAY", "TOMORROW", "FUTURE", "PAST", "PRESENT", "CURRENT",
+      "LATEST", "NEWEST", "OLDEST", "FIRST", "LAST", "BEFORE", "AFTER", "EARLY",
+      "LATE", "SOON", "LATER", "ONCE", "TWICE", "THRICE", "MULTIPLE", "SINGLE",
+      "DOUBLE", "TRIPLE", "QUAD", "QUINT", "HEX", "OCT", "DEC", "BIN", "OCTAL",
+      "DECIMAL", "BINARY", "HEXADECIMAL", "BASE", "RADIX", "DIGIT", "NUMBER",
+      "NUMERIC", "ALPHANUMERIC", "ALPHABETIC", "LETTER", "CHARACTER", "SYMBOL",
+      "SIGN", "MARK", "DOT", "DASH", "UNDERSCORE", "HYPHEN", "SLASH", "BACKSLASH",
+      "PIPE", "TILDE", "GRAVE", "ACUTE", "CIRCUMFLEX", "DIAERESIS", "CEDILLA",
+      "RING", "CARON", "GAMMA", "BETA", "ALPHA", "DELTA", "EPSILON", "ZETA",
+      "ETA", "THETA", "IOTA", "KAPPA", "LAMBDA", "MU", "NU", "XI", "OMICRON",
+      "PI", "RHO", "SIGMA", "TAU", "UPSILON", "PHI", "CHI", "PSI", "OMEGA"
     ];
-    return !common.includes(clean.toUpperCase());
+    
+    // Check if it's a common word
+    if (common.includes(clean.toUpperCase())) return false;
+    
+    // Additional pattern checks for common false positives
+    // Avoid codes that look like version numbers (e.g., "1.2.3", "v1.0")
+    if (/^v?\d+\.\d+/.test(clean)) return false;
+    
+    // Avoid codes that look like dates (e.g., "20240101", "2024-01-01")
+    if (/^\d{4}[-/]?\d{2}[-/]?\d{2}$/.test(clean)) return false;
+    
+    // Avoid codes that look like times (e.g., "12:34:56", "123456")
+    if (/^\d{1,2}[:.]?\d{2}[:.]?\d{2}$/.test(clean)) return false;
+    
+    // Avoid codes that are too repetitive (e.g., "AAAA1111", "1111AAAA")
+    if (/(.)\1{3,}/.test(clean)) return false;
+    
+    // Avoid codes that are sequential (e.g., "123456", "ABCDEF")
+    if (/^(0123456789|1234567890|9876543210|0987654321|ABCDEFGHIJ|abcdefghij|ZYXWVUTSRQ|zyxwvutsrq)$/.test(clean)) return false;
+    
+    // Avoid codes that are too simple patterns (e.g., "A1A1A1", "1A1A1A")
+    if (/^([A-Za-z]\d){2,}$/.test(clean) && clean.length <= 8) return false;
+    if (/^(\d[A-Za-z]){2,}$/.test(clean) && clean.length <= 8) return false;
+    
+    return true;
   };
 
   const extractCodeFromURL = useCallback((url: string) => {
@@ -278,11 +334,14 @@ export default function Scanner() {
       const raw = (text || "").replace(/\s+/g, " ").trim();
       const tokens = raw.split(/[^A-Za-z0-9]+/).filter(Boolean);
       let best = "";
+      
       for (const t of tokens) {
-        if (t.length > best.length && t.length >= 6 && t.length <= 25 && !/^\d+$/.test(t)) {
+        // Only consider tokens that are valid product codes
+        if (t.length > best.length && isValidProductCode(t)) {
           best = t;
         }
       }
+      
       return best || null;
     } catch {
       return null;
@@ -479,13 +538,24 @@ export default function Scanner() {
         if (!videoRef.current) return;
         const qr = readQrInViewfinderOnce();
         let printed: string | null = null;
+        
         if (qr && qr.text) {
           const urlCode = extractCodeFromURL(qr.text) || null;
           printed = await ocrUnderViewfinderOnce(true);
-          if (printed) processFoundCode(printed); else if (urlCode) processFoundCode(urlCode);
+          
+          // Only process if we have a valid code
+          if (printed && isValidProductCode(printed)) {
+            processFoundCode(printed);
+          } else if (urlCode && isValidProductCode(urlCode)) {
+            processFoundCode(urlCode);
+          }
         } else {
           printed = await ocrUnderViewfinderOnce(true);
-          if (printed) processFoundCode(printed);
+          
+          // Only process if we have a valid code
+          if (printed && isValidProductCode(printed)) {
+            processFoundCode(printed);
+          }
         }
       }, 1200) as number;
     } catch {
@@ -567,18 +637,7 @@ export default function Scanner() {
   }, [userId]);
 
   // Persist user color when it changes and a user is selected
-  useEffect(() => {
-    const sb = supabase;
-    const uid = userId;
-    if (!sb || !uid) return;
-    const colorToSave = userColor;
-    const t = window.setTimeout(async () => {
-      try {
-        await sb.from("users").update({ color: colorToSave }).eq("id", uid);
-      } catch {}
-    }, 300);
-    return () => window.clearTimeout(t);
-  }, [userColor, userId]);
+  // (Removed client-side direct save to avoid conflicts with API auth flow)
 
   const onSubmitToZyn = async () => {
     if (!scannedCode) return;
@@ -593,7 +652,6 @@ export default function Scanner() {
     }
   };
 
-  const mockTest = () => processFoundCode("AbC123xYz789");
 
   return (
     <div className="container">
@@ -807,9 +865,6 @@ export default function Scanner() {
             Save Color
           </button>
         )}
-        <button id="testMock" className="btn btn-small" onClick={mockTest} style={{ marginLeft: "auto" }}>
-          Test Mock Code
-        </button>
       </div>
 
       {/* Instructions */}
