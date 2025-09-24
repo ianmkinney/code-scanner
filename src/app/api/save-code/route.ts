@@ -31,8 +31,35 @@ export async function POST(request: NextRequest) {
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
     
-    const insertPayload: { code: string; user_id?: string } = { code }
-    if (user) insertPayload.user_id = user.id
+    let userIdToUse: string;
+    
+    if (user) {
+      // Use authenticated user's ID
+      userIdToUse = user.id;
+    } else {
+      // Look up master user by name
+      const { data: masterUser, error: masterUserError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('name', 'master')
+        .maybeSingle();
+      
+      if (masterUserError) {
+        console.error('Error checking master user:', masterUserError);
+        return NextResponse.json({ error: 'Database error' }, { status: 500 });
+      }
+      
+      if (!masterUser) {
+        return NextResponse.json({ error: 'Master user not found in database' }, { status: 500 });
+      }
+      
+      userIdToUse = masterUser.id;
+    }
+    
+    const insertPayload: { code: string; user_id: string } = { 
+      code, 
+      user_id: userIdToUse 
+    }
 
     const { data, error } = await supabase
       .from('scanned_codes')

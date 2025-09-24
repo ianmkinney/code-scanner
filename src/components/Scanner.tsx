@@ -239,9 +239,12 @@ export default function Scanner() {
             setUserCans(cans || []);
           }
         }
+      } else {
+        const error = await response.json();
+        showStatus(`Failed to save code: ${error.error}`, "error");
       }
-    } catch {
-      // ignore persistence errors for UX
+    } catch (error) {
+      showStatus("Failed to save code to database.", "error");
     }
   }, [hideBanner, showBanner, showStatus, stopCamera, userId]);
 
