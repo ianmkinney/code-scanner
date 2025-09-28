@@ -18,8 +18,10 @@ export default function Scanner() {
   const [username, setUsername] = useState<string>("");
   const [userId, setUserId] = useState<string | null>(null);
   const [userCount, setUserCount] = useState<number | null>(null);
-  const [userCans, setUserCans] = useState<Array<{id: string, code: string, created_at: string}> | null>(null);
+  const [userCans, setUserCans] = useState<Array<{id: string, code: string, created_at: string, redeemed: boolean, redemption_error?: string}> | null>(null);
   const [userColor, setUserColor] = useState<string>("#00cc6a");
+  const [selectedCans, setSelectedCans] = useState<Set<string>>(new Set());
+  const [redeemFilter, setRedeemFilter] = useState<'all' | 'redeemed' | 'unredeemed'>('all');
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -233,7 +235,7 @@ export default function Scanner() {
           if (supabase) {
             const { data: cans } = await supabase
               .from("scanned_codes")
-              .select("id, code, created_at")
+              .select("id, code, created_at, redeemed, redemption_error")
               .eq("user_id", userId)
               .order("created_at", { ascending: false });
             setUserCans(cans || []);
@@ -622,7 +624,7 @@ export default function Scanner() {
         // Load user cans
         const { data: cans, error: cansError } = await supabase
           .from("scanned_codes")
-          .select("id, code, created_at")
+          .select("id, code, created_at, redeemed, redemption_error")
           .eq("user_id", userId)
           .order("created_at", { ascending: false });
         if (cansError) throw cansError;
@@ -641,17 +643,200 @@ export default function Scanner() {
 
   const onSubmitTo = async () => {
     if (!scannedCode) return;
-    showStatus("Opening  Rewards...", "info");
-    try {
-      await navigator.clipboard.writeText(scannedCode);
-      const Url = "https://us..com/Rewards";
-      window.open(Url, "_blank");
-      showStatus("Code copied! Paste in  Rewards form.", "success");
-    } catch {
-      showStatus(`Error opening site. Your code is: ${scannedCode}`, "error");
+    await openZynRewards(scannedCode);
+  };
+
+  const openZynRewards = async (code?: string) => {
+    if (code) {
+      showStatus("Copying code and opening ZYN Rewards...", "info");
+      try {
+        await navigator.clipboard.writeText(code);
+        const Url = "https://us.zyn.com/ZYNRewards/";
+        // Try to reuse existing ZYN tab, fallback to new tab
+        const zynWindow = window.open("", "zyn-rewards-tab");
+        if (zynWindow && !zynWindow.closed) {
+          zynWindow.location.href = Url;
+          zynWindow.focus();
+        } else {
+          window.open(Url, "zyn-rewards-tab");
+        }
+        showStatus("Code copied! Paste in ZYN Rewards form.", "success");
+      } catch {
+        showStatus(`Error opening site. Your code is: ${code}`, "error");
+      }
+    } else {
+      showStatus("Opening ZYN Rewards...", "info");
+      try {
+        const Url = "https://us.zyn.com/ZYNRewards/";
+        // Try to reuse existing ZYN tab, fallback to new tab
+        const zynWindow = window.open("", "zyn-rewards-tab");
+        if (zynWindow && !zynWindow.closed) {
+          zynWindow.location.href = Url;
+          zynWindow.focus();
+        } else {
+          window.open(Url, "zyn-rewards-tab");
+        }
+        showStatus("ZYN Rewards opened.", "success");
+      } catch {
+        showStatus("Error opening ZYN Rewards.", "error");
+      }
     }
   };
 
+  const copyCode = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      showStatus(`Code ${code} copied to clipboard!`, "success");
+    } catch {
+      showStatus(`Failed to copy code: ${code}`, "error");
+    }
+  };
+
+  const updateManualRedemption = async (codeId: string, code: string, isRedeemed: boolean) => {
+    if (!userId) {
+      showStatus("Not logged in.", "error");
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/update-redemption', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-User-ID': userId
+        },
+        body: JSON.stringify({ codeId, isRedeemed })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        showStatus(`Code ${code} marked as ${isRedeemed ? 'redeemed' : 'unredeemed'}`, "success");
+        // Refresh user cans list
+        if (supabase) {
+          const { data: cans } = await supabase
+            .from("scanned_codes")
+            .select("id, code, created_at, redeemed, redemption_error")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false });
+          setUserCans(cans || []);
+        }
+      } else {
+        showStatus(`Failed to update ${code}: ${result.error}`, "error");
+      }
+    } catch (error) {
+      showStatus(`Failed to update ${code}`, "error");
+      console.error("Redemption update error:", error);
+    }
+  };
+
+  // Redemption functions
+  const redeemSingleCode = async (codeId: string, code: string) => {
+    if (!userId) {
+      showStatus("Not logged in.", "error");
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/redeem-code', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-User-ID': userId
+        },
+        body: JSON.stringify({ codeId, code })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        showStatus(`Code ${code} redeemed successfully!`, "success");
+        // Refresh user cans list
+        if (supabase) {
+          const { data: cans } = await supabase
+            .from("scanned_codes")
+            .select("id, code, created_at, redeemed, redemption_error")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false });
+          setUserCans(cans || []);
+        }
+      } else {
+        showStatus(`Failed to redeem ${code}: ${result.error}`, "error");
+      }
+    } catch (error) {
+      showStatus(`Failed to redeem ${code}`, "error");
+      console.error("Redemption error:", error);
+    }
+  };
+
+  const redeemSelectedCodes = async () => {
+    if (!userId) {
+      showStatus("Not logged in.", "error");
+      return;
+    }
+
+    if (selectedCans.size === 0) {
+      showStatus("Please select codes to redeem.", "error");
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/redeem-batch', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-User-ID': userId
+        },
+        body: JSON.stringify({ codeIds: Array.from(selectedCans) })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        showStatus(`Successfully redeemed ${result.summary.successful} codes!`, "success");
+        if (result.summary.failed > 0) {
+          showStatus(`${result.summary.failed} codes failed to redeem.`, "error");
+        }
+      } else {
+        showStatus(`Failed to redeem codes: ${result.error}`, "error");
+      }
+
+      // Clear selection and refresh user cans list
+      setSelectedCans(new Set());
+      if (supabase) {
+        const { data: cans } = await supabase
+          .from("scanned_codes")
+          .select("id, code, created_at, redeemed, redemption_error")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false });
+        setUserCans(cans || []);
+      }
+    } catch (error) {
+      showStatus("Failed to redeem selected codes", "error");
+      console.error("Batch redemption error:", error);
+    }
+  };
+
+  const toggleCanSelection = (canId: string) => {
+    const newSelection = new Set(selectedCans);
+    if (newSelection.has(canId)) {
+      newSelection.delete(canId);
+    } else {
+      newSelection.add(canId);
+    }
+    setSelectedCans(newSelection);
+  };
+
+  const filteredUserCans = userCans?.filter(can => {
+    switch (redeemFilter) {
+      case 'redeemed':
+        return can.redeemed;
+      case 'unredeemed':
+        return !can.redeemed;
+      default:
+        return true;
+    }
+  }) || [];
 
   return (
     <div className="container">
@@ -709,10 +894,10 @@ export default function Scanner() {
         <h3>Found Code:</h3>
         <div id="codeDisplay" className="code-display">{scannedCode || ""}</div>
         <div id="clipboardNotification" className="clipboard-notification" style={{ display: scannedCode ? "block" : "none" }}>
-          📋 Code copied to clipboard! Paste into  Rewards for your points.
+          📋 Code copied to clipboard! Paste into ZYN Rewards for your points.
         </div>
         <button id="submitCode" className="btn btn-primary" style={{ width: "100%", marginBottom: 10 }} onClick={onSubmitTo}>
-          🌐 Go to  Rewards
+          🌐 Go to ZYN Rewards
         </button>
         <button id="scanAgain" className="btn btn-secondary" style={{ width: "100%" }} onClick={resetScanner}>
           🔄 Scan Another
@@ -786,7 +971,7 @@ export default function Scanner() {
           {userCans && userCans.length > 0 && (
             <div style={{ 
               marginTop: 12, 
-              maxHeight: "200px", 
+              maxHeight: "300px", 
               overflowY: "auto", 
               border: "1px solid rgba(255,255,255,0.2)", 
               borderRadius: 8, 
@@ -795,24 +980,157 @@ export default function Scanner() {
               animation: "slideInUp 0.6s ease-out"
             }}>
               <div style={{ fontWeight: 600, marginBottom: 8, textAlign: "center" }}>Your Scanned Cans:</div>
-              {userCans.map((can, index) => (
+              
+              {/* ZYN Rewards Info */}
+              <div style={{ 
+                fontSize: 10, 
+                opacity: 0.7, 
+                textAlign: "center", 
+                marginBottom: 8,
+                padding: "4px 8px",
+                background: "rgba(255,255,255,0.05)",
+                borderRadius: 4
+              }}>
+                💡 ZYN Rewards Integration: Redeem codes directly to your ZYN account
+              </div>
+              
+              {/* Open ZYN Rewards Button */}
+              <div style={{ marginBottom: 8, textAlign: "center" }}>
+                <button 
+                  onClick={() => openZynRewards()}
+                  className="btn btn-small"
+                  style={{ 
+                    background: "#4a90e2",
+                    color: "white",
+                    fontSize: 11,
+                    padding: "4px 8px"
+                  }}
+                >
+                  🌐 Open Rewards
+                </button>
+              </div>
+              
+              {/* Filter dropdown */}
+              <div style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
+                <label style={{ fontSize: 12, opacity: 0.8 }}>Filter:</label>
+                <select 
+                  value={redeemFilter} 
+                  onChange={(e) => setRedeemFilter(e.target.value as 'all' | 'redeemed' | 'unredeemed')}
+                  style={{
+                    padding: "2px 6px",
+                    fontSize: 11,
+                    borderRadius: 4,
+                    background: "rgba(255,255,255,0.1)",
+                    color: "white",
+                    border: "1px solid rgba(255,255,255,0.2)"
+                  }}
+                >
+                  <option value="all">All Codes</option>
+                  <option value="unredeemed">Unredeemed</option>
+                  <option value="redeemed">Redeemed</option>
+                </select>
+              </div>
+
+              {/* Batch redeem button */}
+              {selectedCans.size > 0 && (
+                <div style={{ marginBottom: 8, textAlign: "center" }}>
+                  <button 
+                    onClick={redeemSelectedCodes}
+                    className="btn btn-small"
+                    style={{ 
+                      background: "#ff6b6b",
+                      color: "white",
+                      fontSize: 11,
+                      padding: "4px 8px"
+                    }}
+                  >
+                    Auto-Redeem Selected ({selectedCans.size})
+                  </button>
+                </div>
+              )}
+
+              {filteredUserCans.map((can, index) => (
                 <div key={can.id} style={{ 
-                  display: "flex", 
-                  justifyContent: "space-between", 
-                  alignItems: "center", 
-                  padding: "4px 8px", 
-                  marginBottom: 4,
-                  background: "rgba(255,255,255,0.1)",
-                  borderRadius: 4,
+                  padding: "8px", 
+                  marginBottom: 6,
+                  background: can.redeemed ? "rgba(0,204,106,0.2)" : "rgba(255,255,255,0.1)",
+                  border: can.redeemed ? "1px solid rgba(0,204,106,0.3)" : "1px solid transparent",
+                  borderRadius: 6,
                   fontSize: 12,
                   animation: `fadeInUp 0.4s ease-out ${index * 0.1}s both`
                 }}>
-                  <div style={{ fontWeight: 500 }}>{can.code}</div>
-                  <div style={{ opacity: 0.7 }}>
-                    {new Date(can.created_at).toLocaleString()}
+                  {/* Top row: Code and selection checkbox */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input 
+                        type="checkbox" 
+                        checked={selectedCans.has(can.id)}
+                        onChange={() => toggleCanSelection(can.id)}
+                        disabled={can.redeemed}
+                        style={{ margin: 0 }}
+                      />
+                      <div style={{ fontWeight: 500, color: can.redeemed ? "#00cc6a" : "white" }}>
+                        {can.code}
+                        {can.redeemed && <span style={{ marginLeft: 4, fontSize: 10 }}>✓</span>}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <label style={{ fontSize: 10, opacity: 0.8 }}>Redeemed:</label>
+                      <input 
+                        type="checkbox" 
+                        checked={can.redeemed}
+                        onChange={(e) => updateManualRedemption(can.id, can.code, e.target.checked)}
+                        style={{ margin: 0 }}
+                      />
+                    </div>
+                  </div>
+                  
+                  {/* Bottom row: Date and action buttons */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ opacity: 0.7, fontSize: 10 }}>
+                      {new Date(can.created_at).toLocaleDateString()}
+                    </div>
+                    {!can.redeemed && (
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button 
+                          onClick={() => copyCode(can.code)}
+                          style={{
+                            background: "#4a90e2",
+                            border: "1px solid rgba(255,255,255,0.2)",
+                            borderRadius: 3,
+                            color: "white",
+                            fontSize: 10,
+                            padding: "2px 6px",
+                            cursor: "pointer"
+                          }}
+                        >
+                          Copy
+                        </button>
+                        <button 
+                          onClick={() => redeemSingleCode(can.id, can.code)}
+                          style={{
+                            background: "rgba(255,255,255,0.1)",
+                            border: "1px solid rgba(255,255,255,0.2)",
+                            borderRadius: 3,
+                            color: "white",
+                            fontSize: 10,
+                            padding: "2px 6px",
+                            cursor: "pointer"
+                          }}
+                        >
+                          Auto-Redeem
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
+              
+              {filteredUserCans.length === 0 && (
+                <div style={{ textAlign: "center", opacity: 0.6, fontSize: 12, padding: 16 }}>
+                  No codes found for selected filter
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -875,7 +1193,7 @@ export default function Scanner() {
           <br />
           <li>The app auto-detects when both are clear and reads the printed code.</li>
           <br />
-          <li>Log in to  Rewards once and keep the tab open for quick entry.</li>
+          <li>Log in to ZYN Rewards once and keep the tab open for quick entry.</li>
           <br />
           <li>Scan multiple cans; codes are copied to your clipboard automatically.</li>
         </ul>

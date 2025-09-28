@@ -37,7 +37,7 @@ export class RateLimiter {
       this.getDefaultKey(request)
     
     const now = Date.now()
-    const windowStart = now - this.config.windowMs
+    // const windowStart = now - this.config.windowMs // Available for future use
     const resetTime = now + this.config.windowMs
 
     const entry = rateLimitStore.get(key)
