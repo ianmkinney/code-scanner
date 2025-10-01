@@ -1,11 +1,50 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ChangeEvent, MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent, TouchEvent as ReactTouchEvent, CSSProperties } from "react";
 import jsQR from "jsqr";
 import Tesseract from "tesseract.js";
 import { supabase } from "../lib/supabase";
 
 type StatusKind = "info" | "success" | "error";
+
+// Extended DOM media types to avoid 'any' and enable feature detection
+type FocusMode = "manual" | "single-shot" | "continuous" | (string & {});
+
+interface MediaTrackConstraintSetExtended extends MediaTrackConstraintSet {
+  zoom?: number;
+  torch?: boolean;
+  pointsOfInterest?: Array<{ x: number; y: number }>;
+  focusMode?: FocusMode;
+}
+
+interface MediaTrackConstraintsExtended extends MediaTrackConstraints {
+  advanced?: MediaTrackConstraintSetExtended[];
+}
+
+interface MediaTrackCapabilitiesExtended extends MediaTrackCapabilities {
+  zoom?: number | { min: number; max: number; step?: number };
+  torch?: boolean;
+  pointsOfInterest?: boolean;
+  focusMode?: FocusMode[] | FocusMode;
+}
+
+interface MediaTrackSettingsExtended extends MediaTrackSettings {
+  zoom?: number;
+  focusMode?: FocusMode;
+}
+
+type MediaStreamTrackWithControls = MediaStreamTrack & {
+  getCapabilities?: () => MediaTrackCapabilitiesExtended;
+  getSettings?: () => MediaTrackSettingsExtended;
+  applyConstraints?: (constraints: MediaTrackConstraintsExtended) => Promise<void>;
+};
+
+declare global {
+  interface Window {
+    ImageCapture?: new (track: MediaStreamTrack) => unknown;
+  }
+}
 
 export default function Scanner() {
   const [isScanning, setIsScanning] = useState(false);
@@ -28,7 +67,7 @@ export default function Scanner() {
   const ocrTimerRef = useRef<number | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mpPollRef = useRef<number | null>(null);
-  const imageCaptureRef = useRef<any | null>(null);
+  const imageCaptureRef = useRef<unknown | null>(null);
   const pinchStartDistRef = useRef<number | null>(null);
   const pinchStartZoomRef = useRef<number>(1);
 
@@ -44,7 +83,7 @@ export default function Scanner() {
   const [pointsOfInterestSupported, setPointsOfInterestSupported] = useState(false);
   const [singleShotFocusSupported, setSingleShotFocusSupported] = useState(false);
 
-  const handleColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleColorChange = (e: ChangeEvent<HTMLInputElement>) => {
     const newColor = e.target.value;
     setUserColor(newColor);
     document.documentElement.style.setProperty("--can-green", newColor);
@@ -173,7 +212,7 @@ export default function Scanner() {
   const stopCamera = useCallback(() => {
     setIsScanning(false);
     if (mediaStreamRef.current) {
-      try { mediaStreamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
+      try { mediaStreamRef.current.getTracks().forEach((track: MediaStreamTrack) => track.stop()); } catch {}
       mediaStreamRef.current = null;
     }
     if (ocrTimerRef.current) { window.clearInterval(ocrTimerRef.current); ocrTimerRef.current = null; }
@@ -243,9 +282,9 @@ export default function Scanner() {
       });
       
       if (response.ok) {
-        setTotalCount((n) => (typeof n === "number" ? n + 1 : n));
+        setTotalCount((n: number | null) => (typeof n === "number" ? n + 1 : n));
         if (userId) {
-          setUserCount((n) => (typeof n === "number" ? n + 1 : n));
+          setUserCount((n: number | null) => (typeof n === "number" ? n + 1 : n));
           // Refresh user cans list
           if (supabase) {
             const { data: cans } = await supabase
@@ -411,16 +450,24 @@ export default function Scanner() {
 
   const initTrackControls = useCallback(() => {
     try {
-      const track = mediaStreamRef.current?.getVideoTracks?.()[0];
+      const track = mediaStreamRef.current?.getVideoTracks?.()[0] as MediaStreamTrackWithControls | undefined;
       if (!track) return;
-      const caps = (track as any).getCapabilities ? (track as any).getCapabilities() : {};
-      const settings = (track as any).getSettings ? (track as any).getSettings() : {};
+      const caps: MediaTrackCapabilitiesExtended = typeof track.getCapabilities === "function" ? (track.getCapabilities() || ({} as MediaTrackCapabilitiesExtended)) : ({} as MediaTrackCapabilitiesExtended);
+      const settings: MediaTrackSettingsExtended = typeof track.getSettings === "function" ? (track.getSettings() || ({} as MediaTrackSettingsExtended)) : ({} as MediaTrackSettingsExtended);
 
       // Zoom support
-      if (typeof caps.zoom === "number" || (caps.zoom && typeof caps.zoom.min !== "undefined")) {
-        const min = typeof caps.zoom.min === "number" ? caps.zoom.min : (typeof caps.zoom === "number" ? 1 : 1);
-        const max = typeof caps.zoom.max === "number" ? caps.zoom.max : (typeof caps.zoom === "number" ? caps.zoom : 1);
-        const step = typeof caps.zoom.step === "number" && caps.zoom.step > 0 ? caps.zoom.step : 0.1;
+      if (typeof caps.zoom === "number" || (caps.zoom && typeof (caps.zoom as { min?: number }).min !== "undefined")) {
+        let min = 1;
+        let max = 1;
+        let step = 0.1;
+        if (typeof caps.zoom === "number") {
+          max = caps.zoom;
+        } else if (caps.zoom) {
+          const z = caps.zoom as { min: number; max: number; step?: number };
+          min = z.min;
+          max = z.max;
+          step = typeof z.step === "number" && z.step > 0 ? z.step : 0.1;
+        }
         const current = typeof settings.zoom === "number" ? settings.zoom : min;
         setZoomMin(min);
         setZoomMax(max);
@@ -432,23 +479,22 @@ export default function Scanner() {
       }
 
       // Torch support
-      setTorchSupported(!!caps.torch);
+      setTorchSupported(Boolean((caps as MediaTrackCapabilitiesExtended).torch));
 
       // Focus support
-      setPointsOfInterestSupported(!!caps.pointsOfInterest);
-      const focusModes: string[] = Array.isArray(caps.focusMode) ? caps.focusMode : [];
+      setPointsOfInterestSupported(Boolean((caps as MediaTrackCapabilitiesExtended).pointsOfInterest));
+      const focusModes: FocusMode[] = Array.isArray(caps.focusMode) ? (caps.focusMode as FocusMode[]) : [];
       setSingleShotFocusSupported(focusModes.includes("single-shot"));
 
       // Prefer continuous focus if available
       if (focusModes.includes("continuous")) {
-        try { (track as any).applyConstraints({ advanced: [{ focusMode: "continuous" }] }); } catch {}
+        try { track.applyConstraints && track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }); } catch {}
       }
 
       // Initialize ImageCapture if available
       try {
-        const w = window as any;
-        if (typeof w.ImageCapture === "function") {
-          imageCaptureRef.current = new w.ImageCapture(track);
+        if (typeof window.ImageCapture === "function") {
+          imageCaptureRef.current = new window.ImageCapture(track);
         }
       } catch {}
     } catch {}
@@ -456,25 +502,23 @@ export default function Scanner() {
 
   const applyZoom = useCallback(async (value: number) => {
     try {
-      const track = mediaStreamRef.current?.getVideoTracks?.()[0];
+      const track = mediaStreamRef.current?.getVideoTracks?.()[0] as MediaStreamTrackWithControls | undefined;
       if (!track || !zoomSupported) return;
       const clamped = Math.max(zoomMin, Math.min(zoomMax, value));
       setZoomValue(clamped);
       try {
-        await (track as any).applyConstraints({ advanced: [{ zoom: clamped }] });
-      } catch {
-        await (track as any).applyConstraints({ zoom: clamped });
-      }
+        if (track.applyConstraints) await track.applyConstraints({ advanced: [{ zoom: clamped }] });
+      } catch {}
     } catch {}
   }, [zoomMax, zoomMin, zoomSupported]);
 
   const toggleTorch = useCallback(async () => {
     try {
-      const track = mediaStreamRef.current?.getVideoTracks?.()[0];
+      const track = mediaStreamRef.current?.getVideoTracks?.()[0] as MediaStreamTrackWithControls | undefined;
       if (!track || !torchSupported) return;
       const next = !torchOn;
       try {
-        await (track as any).applyConstraints({ advanced: [{ torch: next }] });
+        if (track.applyConstraints) await track.applyConstraints({ advanced: [{ torch: next }] });
         setTorchOn(next);
         showBanner(next ? "🔦 Flashlight on" : "🔦 Flashlight off", "info");
       } catch {
@@ -490,9 +534,9 @@ export default function Scanner() {
     return Math.sqrt(dx * dx + dy * dy);
   };
 
-  const handleViewfinderClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+  const handleViewfinderClick = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
     try {
-      const track = mediaStreamRef.current?.getVideoTracks?.()[0] as any;
+      const track = mediaStreamRef.current?.getVideoTracks?.()[0] as MediaStreamTrackWithControls | undefined;
       if (!track || (!pointsOfInterestSupported && !singleShotFocusSupported)) return;
       const vf = (e.currentTarget as HTMLDivElement);
       const rect = vf.getBoundingClientRect();
@@ -500,28 +544,28 @@ export default function Scanner() {
       const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
       if (pointsOfInterestSupported) {
         try {
-          track.applyConstraints({ advanced: [{ pointsOfInterest: [{ x, y }] }] });
+          track.applyConstraints && track.applyConstraints({ advanced: [{ pointsOfInterest: [{ x, y }] }] });
           showBanner("🎯 Focusing...", "info");
           return;
         } catch {}
       }
       if (singleShotFocusSupported) {
         try {
-          track.applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
+          track.applyConstraints && track.applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
           showBanner("🎯 Focus triggered", "info");
         } catch {}
       }
     } catch {}
   }, [pointsOfInterestSupported, showBanner, singleShotFocusSupported]);
 
-  const handleViewfinderWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+  const handleViewfinderWheel = useCallback((e: ReactWheelEvent<HTMLDivElement>) => {
     if (!zoomSupported) return;
     e.preventDefault();
     const delta = e.deltaY > 0 ? -zoomStep : zoomStep;
     applyZoom(zoomValue + delta);
   }, [applyZoom, zoomStep, zoomSupported, zoomValue]);
 
-  const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+  const handleTouchStart = useCallback((e: ReactTouchEvent<HTMLDivElement>) => {
     if (!zoomSupported) return;
     if (e.touches.length === 2) {
       pinchStartDistRef.current = distanceBetweenTouches(e.touches);
@@ -529,7 +573,7 @@ export default function Scanner() {
     }
   }, [zoomSupported, zoomValue]);
 
-  const handleTouchMove = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+  const handleTouchMove = useCallback((e: ReactTouchEvent<HTMLDivElement>) => {
     if (!zoomSupported) return;
     if (e.touches.length === 2 && pinchStartDistRef.current) {
       e.preventDefault();
@@ -749,7 +793,7 @@ export default function Scanner() {
     return () => {
       if (ocrTimerRef.current) window.clearInterval(ocrTimerRef.current);
       if (mpPollRef.current) window.clearInterval(mpPollRef.current);
-      if (mediaStreamRef.current) mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      if (mediaStreamRef.current) mediaStreamRef.current.getTracks().forEach((track: MediaStreamTrack) => track.stop());
     };
   }, []);
 
@@ -1031,7 +1075,7 @@ export default function Scanner() {
         style={{ 
           '--can-green': userColor,
           textShadow: `0 0 30px ${userColor}50`
-        } as React.CSSProperties}
+        } as CSSProperties}
       >
         Can Scan
       </h1>
@@ -1260,7 +1304,7 @@ export default function Scanner() {
                 </div>
               )}
 
-              {filteredUserCans.map((can, index) => (
+              {filteredUserCans.map((can: { id: string; code: string; created_at: string; redeemed: boolean; redemption_error?: string }, index: number) => (
                 <div key={can.id} style={{ 
                   padding: "8px", 
                   marginBottom: 6,
