@@ -18,8 +18,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Authentication
-    const { user } = await authenticateRequest(request)
-    // Note: user is available for future use if needed
+    await authenticateRequest(request)
 
     const { codeIds } = await request.json()
     
@@ -49,7 +48,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Filter out already redeemed codes
-    const unredeemedCodes = codesToRedeem.filter(code => !code.redeemed)
+    const unredeemedCodes = (codesToRedeem as Array<{ id: string; code: string; redeemed: boolean; redemption_error?: string }>).filter((code) => !code.redeemed)
     
     if (unredeemedCodes.length === 0) {
       return NextResponse.json({ 

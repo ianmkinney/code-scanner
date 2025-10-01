@@ -1,11 +1,50 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ChangeEvent, MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent, TouchEvent as ReactTouchEvent, CSSProperties } from "react";
 import jsQR from "jsqr";
 import Tesseract from "tesseract.js";
 import { supabase } from "../lib/supabase";
 
 type StatusKind = "info" | "success" | "error";
+
+// Extended DOM media types to avoid 'any' and enable feature detection
+type FocusMode = "manual" | "single-shot" | "continuous" | (string & {});
+
+interface MediaTrackConstraintSetExtended extends MediaTrackConstraintSet {
+  zoom?: number;
+  torch?: boolean;
+  pointsOfInterest?: Array<{ x: number; y: number }>;
+  focusMode?: FocusMode;
+}
+
+interface MediaTrackConstraintsExtended extends MediaTrackConstraints {
+  advanced?: MediaTrackConstraintSetExtended[];
+}
+
+interface MediaTrackCapabilitiesExtended extends MediaTrackCapabilities {
+  zoom?: number | { min: number; max: number; step?: number };
+  torch?: boolean;
+  pointsOfInterest?: boolean;
+  focusMode?: FocusMode[] | FocusMode;
+}
+
+interface MediaTrackSettingsExtended extends MediaTrackSettings {
+  zoom?: number;
+  focusMode?: FocusMode;
+}
+
+type MediaStreamTrackWithControls = MediaStreamTrack & {
+  getCapabilities?: () => MediaTrackCapabilitiesExtended;
+  getSettings?: () => MediaTrackSettingsExtended;
+  applyConstraints?: (constraints: MediaTrackConstraintsExtended) => Promise<void>;
+};
+
+declare global {
+  interface Window {
+    ImageCapture?: new (track: MediaStreamTrack) => unknown;
+  }
+}
 
 export default function Scanner() {
   const [isScanning, setIsScanning] = useState(false);
@@ -22,14 +61,31 @@ export default function Scanner() {
   const [userColor, setUserColor] = useState<string>("#00cc6a");
   const [selectedCans, setSelectedCans] = useState<Set<string>>(new Set());
   const [redeemFilter, setRedeemFilter] = useState<'all' | 'redeemed' | 'unredeemed'>('all');
+  const [feedbackText, setFeedbackText] = useState<string>("");
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const ocrTimerRef = useRef<number | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mpPollRef = useRef<number | null>(null);
+  const imageCaptureRef = useRef<unknown | null>(null);
+  const pinchStartDistRef = useRef<number | null>(null);
+  const pinchStartZoomRef = useRef<number>(1);
 
-  const handleColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const [zoomSupported, setZoomSupported] = useState(false);
+  const [zoomMin, setZoomMin] = useState<number>(1);
+  const [zoomMax, setZoomMax] = useState<number>(1);
+  const [zoomStep, setZoomStep] = useState<number>(0.1);
+  const [zoomValue, setZoomValue] = useState<number>(1);
+
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
+
+  const [pointsOfInterestSupported, setPointsOfInterestSupported] = useState(false);
+  const [singleShotFocusSupported, setSingleShotFocusSupported] = useState(false);
+
+  const handleColorChange = (e: ChangeEvent<HTMLInputElement>) => {
     const newColor = e.target.value;
     setUserColor(newColor);
     document.documentElement.style.setProperty("--can-green", newColor);
@@ -68,11 +124,8 @@ export default function Scanner() {
     // Cannot be all numbers
     if (/^\d+$/.test(clean)) return false;
     
-    // Cannot be all letters
-    if (/^[A-Za-z]+$/.test(clean)) return false;
-    
-    // Must have at least one letter and one number
-    if (!/[A-Za-z]/.test(clean) || !/\d/.test(clean)) return false;
+    // Must have at least one letter
+    if (!/[A-Za-z]/.test(clean)) return false;
     
     // Check against common non-code words that might be detected by OCR
     const common = [
@@ -158,7 +211,7 @@ export default function Scanner() {
   const stopCamera = useCallback(() => {
     setIsScanning(false);
     if (mediaStreamRef.current) {
-      try { mediaStreamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
+      try { mediaStreamRef.current.getTracks().forEach((track: MediaStreamTrack) => track.stop()); } catch {}
       mediaStreamRef.current = null;
     }
     if (ocrTimerRef.current) { window.clearInterval(ocrTimerRef.current); ocrTimerRef.current = null; }
@@ -228,9 +281,9 @@ export default function Scanner() {
       });
       
       if (response.ok) {
-        setTotalCount((n) => (typeof n === "number" ? n + 1 : n));
+        setTotalCount((n: number | null) => (typeof n === "number" ? n + 1 : n));
         if (userId) {
-          setUserCount((n) => (typeof n === "number" ? n + 1 : n));
+          setUserCount((n: number | null) => (typeof n === "number" ? n + 1 : n));
           // Refresh user cans list
           if (supabase) {
             const { data: cans } = await supabase
@@ -394,6 +447,175 @@ export default function Scanner() {
     }
   }, []);
 
+  const initTrackControls = useCallback(() => {
+    try {
+      const track = mediaStreamRef.current?.getVideoTracks?.()[0] as MediaStreamTrackWithControls | undefined;
+      if (!track) return;
+      const caps: MediaTrackCapabilitiesExtended = typeof track.getCapabilities === "function" ? (track.getCapabilities() || ({} as MediaTrackCapabilitiesExtended)) : ({} as MediaTrackCapabilitiesExtended);
+      const settings: MediaTrackSettingsExtended = typeof track.getSettings === "function" ? (track.getSettings() || ({} as MediaTrackSettingsExtended)) : ({} as MediaTrackSettingsExtended);
+
+      // Zoom support
+      if (typeof caps.zoom === "number" || (caps.zoom && typeof (caps.zoom as { min?: number }).min !== "undefined")) {
+        let min = 1;
+        let max = 1;
+        let step = 0.1;
+        if (typeof caps.zoom === "number") {
+          max = caps.zoom;
+        } else if (caps.zoom) {
+          const z = caps.zoom as { min: number; max: number; step?: number };
+          min = z.min;
+          max = z.max;
+          step = typeof z.step === "number" && z.step > 0 ? z.step : 0.1;
+        }
+        const current = typeof settings.zoom === "number" ? settings.zoom : min;
+        setZoomMin(min);
+        setZoomMax(max);
+        setZoomStep(step);
+        setZoomValue(current);
+        setZoomSupported(max > min);
+      } else {
+        setZoomSupported(false);
+      }
+
+      // Torch support
+      setTorchSupported(Boolean((caps as MediaTrackCapabilitiesExtended).torch));
+
+      // Focus support
+      setPointsOfInterestSupported(Boolean((caps as MediaTrackCapabilitiesExtended).pointsOfInterest));
+      const focusModes: FocusMode[] = Array.isArray(caps.focusMode) ? (caps.focusMode as FocusMode[]) : [];
+      setSingleShotFocusSupported(focusModes.includes("single-shot"));
+
+      // Prefer continuous focus if available
+      if (focusModes.includes("continuous")) {
+        try { 
+          if (track.applyConstraints) {
+            track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+          }
+        } catch {}
+      }
+
+      // Initialize ImageCapture if available
+      try {
+        if (typeof window.ImageCapture === "function") {
+          imageCaptureRef.current = new window.ImageCapture(track);
+        }
+      } catch {}
+    } catch {}
+  }, []);
+
+  const applyZoom = useCallback(async (value: number) => {
+    try {
+      const track = mediaStreamRef.current?.getVideoTracks?.()[0] as MediaStreamTrackWithControls | undefined;
+      if (!track || !zoomSupported) return;
+      const clamped = Math.max(zoomMin, Math.min(zoomMax, value));
+      setZoomValue(clamped);
+      try {
+        if (track.applyConstraints) await track.applyConstraints({ advanced: [{ zoom: clamped }] });
+      } catch {}
+    } catch {}
+  }, [zoomMax, zoomMin, zoomSupported]);
+
+  const toggleTorch = useCallback(async () => {
+    try {
+      const track = mediaStreamRef.current?.getVideoTracks?.()[0] as MediaStreamTrackWithControls | undefined;
+      if (!track || !torchSupported) return;
+      const next = !torchOn;
+      try {
+        if (track.applyConstraints) await track.applyConstraints({ advanced: [{ torch: next }] });
+        setTorchOn(next);
+        showBanner(next ? "🔦 Flashlight on" : "🔦 Flashlight off", "info");
+      } catch {
+        showStatus("Torch not supported on this device.", "error");
+      }
+    } catch {}
+  }, [showBanner, showStatus, torchOn, torchSupported]);
+
+  const distanceBetweenTouches = (touches: React.TouchList) => {
+    if (touches.length < 2) return 0;
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const handleViewfinderClick = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
+    try {
+      const track = mediaStreamRef.current?.getVideoTracks?.()[0] as MediaStreamTrackWithControls | undefined;
+      if (!track || (!pointsOfInterestSupported && !singleShotFocusSupported)) return;
+      const vf = (e.currentTarget as HTMLDivElement);
+      const rect = vf.getBoundingClientRect();
+      const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+      if (pointsOfInterestSupported) {
+        try {
+          if (track.applyConstraints) {
+            track.applyConstraints({ advanced: [{ pointsOfInterest: [{ x, y }] }] });
+          }
+          showBanner("🎯 Focusing...", "info");
+          return;
+        } catch {}
+      }
+      if (singleShotFocusSupported) {
+        try {
+          if (track.applyConstraints) {
+            track.applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
+          }
+          showBanner("🎯 Focus triggered", "info");
+        } catch {}
+      }
+    } catch {}
+  }, [pointsOfInterestSupported, showBanner, singleShotFocusSupported]);
+
+  const handleViewfinderWheel = useCallback((e: ReactWheelEvent<HTMLDivElement>) => {
+    if (!zoomSupported) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -zoomStep : zoomStep;
+    applyZoom(zoomValue + delta);
+  }, [applyZoom, zoomStep, zoomSupported, zoomValue]);
+
+  const handleTouchStart = useCallback((e: ReactTouchEvent<HTMLDivElement>) => {
+    if (!zoomSupported) return;
+    if (e.touches.length === 2) {
+      pinchStartDistRef.current = distanceBetweenTouches(e.touches);
+      pinchStartZoomRef.current = zoomValue;
+    }
+  }, [zoomSupported, zoomValue]);
+
+  const handleTouchMove = useCallback((e: ReactTouchEvent<HTMLDivElement>) => {
+    if (!zoomSupported) return;
+    if (e.touches.length === 2 && pinchStartDistRef.current) {
+      e.preventDefault();
+      const current = distanceBetweenTouches(e.touches);
+      const ratio = current / Math.max(1, pinchStartDistRef.current);
+      const target = pinchStartZoomRef.current * ratio;
+      applyZoom(target);
+    }
+  }, [applyZoom, zoomSupported]);
+
+  const handleTouchEnd = useCallback(() => {
+    pinchStartDistRef.current = null;
+  }, []);
+
+  const captureStill = useCallback(async () => {
+    try {
+      if (!videoRef.current) return;
+      showBanner("📸 Capturing...", "info");
+      // Reuse the existing decode passes against the current video frame
+      const qr = readQrInViewfinderOnce();
+      if (qr && qr.text) {
+        const urlCode = extractCodeFromURL(qr.text) || null;
+        const printed = await ocrUnderViewfinderOnce(false);
+        if (printed && isValidProductCode(printed)) { processFoundCode(printed); return; }
+        if (urlCode && isValidProductCode(urlCode)) { processFoundCode(urlCode); return; }
+      } else {
+        const printed = await ocrUnderViewfinderOnce(false);
+        if (printed && isValidProductCode(printed)) { processFoundCode(printed); return; }
+      }
+      showStatus("No code found in captured frame.", "error");
+    } catch {
+      showStatus("Capture failed.", "error");
+    }
+  }, [extractCodeFromURL, ocrUnderViewfinderOnce, processFoundCode, readQrInViewfinderOnce, showBanner, showStatus]);
+
   // Wait for the <video> element to have non-zero dimensions
   const waitForVideoDims = useCallback(async () => {
     for (let i = 0; i < 25; i++) {
@@ -501,7 +723,7 @@ export default function Scanner() {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       mediaStreamRef.current = stream;
       if (!viewportRef.current) return;
-      if (!videoRef.current) {
+      if (!videoRef.current || !viewportRef.current.contains(videoRef.current)) {
         const v = document.createElement("video");
         v.setAttribute("playsinline", "true");
         v.muted = true;
@@ -518,6 +740,7 @@ export default function Scanner() {
       await video.play();
       await waitForVideoDims();
       updateMp();
+      initTrackControls();
       if (mpPollRef.current) { window.clearInterval(mpPollRef.current); mpPollRef.current = null; }
       let polls = 0;
       mpPollRef.current = window.setInterval(() => {
@@ -563,7 +786,7 @@ export default function Scanner() {
     } catch {
       showStatus("Camera not available. Please use manual entry.", "error");
     }
-  }, [extractCodeFromURL, ocrUnderViewfinderOnce, processFoundCode, readQrInViewfinderOnce, showBanner, showStatus, updateMp, waitForVideoDims]);
+  }, [extractCodeFromURL, initTrackControls, ocrUnderViewfinderOnce, processFoundCode, readQrInViewfinderOnce, showBanner, showStatus, updateMp, waitForVideoDims]);
 
   const resetScanner = useCallback(() => {
     setScannedCode(null);
@@ -577,7 +800,7 @@ export default function Scanner() {
     return () => {
       if (ocrTimerRef.current) window.clearInterval(ocrTimerRef.current);
       if (mpPollRef.current) window.clearInterval(mpPollRef.current);
-      if (mediaStreamRef.current) mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      if (mediaStreamRef.current) mediaStreamRef.current.getTracks().forEach((track: MediaStreamTrack) => track.stop());
     };
   }, []);
 
@@ -827,6 +1050,42 @@ export default function Scanner() {
     setSelectedCans(newSelection);
   };
 
+  const submitFeedback = async () => {
+    if (!feedbackText.trim()) {
+      showStatus("Please enter some feedback.", "error");
+      return;
+    }
+
+    setIsSubmittingFeedback(true);
+    try {
+      const response = await fetch('/api/save-suggestion', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(userId && { 'X-User-ID': userId })
+        },
+        body: JSON.stringify({ 
+          suggestion: feedbackText.trim(),
+          user_id: userId 
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        showStatus("Thank you for your feedback! It helps improve the app.", "success");
+        setFeedbackText("");
+      } else {
+        showStatus(`Failed to submit feedback: ${result.error}`, "error");
+      }
+    } catch (error) {
+      showStatus("Failed to submit feedback. Please try again.", "error");
+      console.error("Feedback submission error:", error);
+    } finally {
+      setIsSubmittingFeedback(false);
+    }
+  };
+
   const filteredUserCans = userCans?.filter(can => {
     switch (redeemFilter) {
       case 'redeemed':
@@ -840,6 +1099,25 @@ export default function Scanner() {
 
   return (
     <div className="container">
+      {/* Nicotine Warning Banner */}
+      <div style={{
+        background: "linear-gradient(135deg, #ff6b6b, #ee5a52)",
+        color: "white",
+        padding: "12px 16px",
+        borderRadius: "8px",
+        marginBottom: "16px",
+        textAlign: "center",
+        fontSize: "14px",
+        fontWeight: "500",
+        boxShadow: "0 4px 12px rgba(255, 107, 107, 0.3)",
+        animation: "fadeInDown 0.4s ease-out"
+      }}>
+        ⚠️ <strong>WARNING:</strong> This application is for tracking ZYN can purchases for rewards. 
+        ZYN contains nicotine, which is an addictive chemical. Nicotine can cause addiction and 
+        may be harmful to your health. This app is designed to help track usage patterns and 
+        support those seeking to reduce or quit nicotine consumption.
+      </div>
+
       {/* Cans Scanned Counter */}
       {supabase && (
         <div className="customize" style={{ 
@@ -859,7 +1137,7 @@ export default function Scanner() {
         style={{ 
           '--can-green': userColor,
           textShadow: `0 0 30px ${userColor}50`
-        } as React.CSSProperties}
+        } as CSSProperties}
       >
         Can Scan
       </h1>
@@ -871,16 +1149,55 @@ export default function Scanner() {
           <div className="puck-green">
             <div className="puck-green-top" />
           </div>
-          <div className="viewfinder-wrap">
+          <div
+            className="viewfinder-wrap"
+            onClick={(e) => { e.stopPropagation(); handleViewfinderClick(e); }}
+            onWheel={(e) => { e.stopPropagation(); handleViewfinderWheel(e); }}
+            onTouchStart={(e) => { e.stopPropagation(); handleTouchStart(e); }}
+            onTouchMove={(e) => { e.stopPropagation(); handleTouchMove(e); }}
+            onTouchEnd={(e) => { e.stopPropagation(); handleTouchEnd(); }}
+            role="button"
+            aria-label="Scanner viewfinder"
+          >
             <div id="scanner-viewport" ref={viewportRef} />
           </div>
           <div id="mpLabel" className="mp-label">{mpLabel}</div>
           <button id="startScanButton" className="start-btn" onClick={(e) => { e.stopPropagation(); startCamera(); }} style={{ display: isScanning ? "none" : "inline-block" }}>
             Start Scan
           </button>
-          <button id="stopScanButton" className="stop-btn" onClick={(e) => { e.stopPropagation(); stopCamera(); if (viewportRef.current) viewportRef.current.innerHTML = ""; }} style={{ display: isScanning ? "inline-block" : "none" }}>
+          <button id="stopScanButton" className="stop-btn" onClick={(e) => { e.stopPropagation(); stopCamera(); if (viewportRef.current) { viewportRef.current.innerHTML = ""; videoRef.current = null; } }} style={{ display: isScanning ? "inline-block" : "none" }}>
             Stop Scan
           </button>
+          <button
+            id="captureButton"
+            className="capture-btn"
+            onClick={(e) => { e.stopPropagation(); captureStill(); }}
+            aria-label="Capture still frame"
+            style={{ display: isScanning ? "inline-block" : "none" }}
+          >
+            Capture
+          </button>
+          <button
+            id="torchButton"
+            className="torch-btn"
+            onClick={(e) => { e.stopPropagation(); toggleTorch(); }}
+            aria-label="Toggle flashlight"
+            style={{ display: isScanning && torchSupported ? "inline-block" : "none" }}
+          >
+            {torchOn ? "Flash Off" : "Flash On"}
+          </button>
+          <input
+            id="zoomSlider"
+            className="zoom-slider"
+            type="range"
+            min={zoomMin}
+            max={zoomMax}
+            step={zoomStep}
+            value={zoomValue}
+            onChange={(e) => { e.stopPropagation(); applyZoom(parseFloat(e.target.value)); }}
+            aria-label="Zoom"
+            style={{ display: isScanning && zoomSupported ? "inline-block" : "none" }}
+          />
         </div>
       </div>
 
@@ -1049,7 +1366,7 @@ export default function Scanner() {
                 </div>
               )}
 
-              {filteredUserCans.map((can, index) => (
+              {filteredUserCans.map((can: { id: string; code: string; created_at: string; redeemed: boolean; redemption_error?: string }, index: number) => (
                 <div key={can.id} style={{ 
                   padding: "8px", 
                   marginBottom: 6,
@@ -1200,6 +1517,95 @@ export default function Scanner() {
       </div>
 
       <div id="status" className={`status ${status ? status.kind : "hidden"}`}>{status?.msg}</div>
+
+      {/* Personal Story Section */}
+      <div style={{
+        marginTop: "32px",
+        padding: "20px",
+        background: "rgba(255,255,255,0.05)",
+        borderRadius: "12px",
+        border: "1px solid rgba(255,255,255,0.1)",
+        animation: "fadeInUp 1.6s ease-out"
+      }}>
+        <h3 style={{ 
+          margin: "0 0 16px 0", 
+          color: "#00cc6a", 
+          fontSize: "18px",
+          textAlign: "center"
+        }}>
+          Why I Made This App
+        </h3>
+        <div style={{ 
+          lineHeight: "1.6", 
+          fontSize: "14px", 
+          color: "rgba(255,255,255,0.9)",
+          textAlign: "center"
+        }}>
+          I made this app to track my ZYN can purchase history, as a way to bring visibility to the problem, and eventually quit this addictive habit.
+          <br /><br />
+          I hope you enjoy this app, and you also are hoping to quit too. Nobody likes being addicted to something!
+        </div>
+      </div>
+
+      {/* Feedback Section */}
+      <div style={{
+        marginTop: "20px",
+        padding: "20px",
+        background: "rgba(255,255,255,0.05)",
+        borderRadius: "12px",
+        border: "1px solid rgba(255,255,255,0.1)",
+        animation: "fadeInUp 1.8s ease-out"
+      }}>
+        <h3 style={{ 
+          margin: "0 0 16px 0", 
+          color: "#4a90e2", 
+          fontSize: "18px",
+          textAlign: "center"
+        }}>
+          Want to give feedback on what to improve?
+        </h3>
+        <div style={{ marginBottom: "12px" }}>
+          <textarea
+            value={feedbackText}
+            onChange={(e) => setFeedbackText(e.target.value)}
+            placeholder="Share your ideas, suggestions, or report bugs..."
+            style={{
+              width: "100%",
+              minHeight: "80px",
+              padding: "12px",
+              borderRadius: "8px",
+              border: "1px solid rgba(255,255,255,0.3)",
+              background: "rgba(255,255,255,0.1)",
+              color: "white",
+              fontSize: "14px",
+              resize: "vertical",
+              fontFamily: "inherit"
+            }}
+          />
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <button
+            onClick={submitFeedback}
+            disabled={isSubmittingFeedback || !feedbackText.trim()}
+            style={{
+              background: isSubmittingFeedback || !feedbackText.trim() 
+                ? "rgba(255,255,255,0.2)" 
+                : "#4a90e2",
+              color: "white",
+              border: "none",
+              borderRadius: "8px",
+              padding: "10px 20px",
+              fontSize: "14px",
+              fontWeight: "500",
+              cursor: isSubmittingFeedback || !feedbackText.trim() ? "not-allowed" : "pointer",
+              opacity: isSubmittingFeedback || !feedbackText.trim() ? 0.6 : 1,
+              transition: "all 0.3s ease"
+            }}
+          >
+            {isSubmittingFeedback ? "Submitting..." : "Submit Feedback"}
+          </button>
+        </div>
+      </div>
 
       <div className="footer" style={{ display: "none" }} />
     </div>
