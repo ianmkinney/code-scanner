@@ -61,6 +61,8 @@ export default function Scanner() {
   const [userColor, setUserColor] = useState<string>("#00cc6a");
   const [selectedCans, setSelectedCans] = useState<Set<string>>(new Set());
   const [redeemFilter, setRedeemFilter] = useState<'all' | 'redeemed' | 'unredeemed'>('all');
+  const [feedbackText, setFeedbackText] = useState<string>("");
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -122,11 +124,8 @@ export default function Scanner() {
     // Cannot be all numbers
     if (/^\d+$/.test(clean)) return false;
     
-    // Cannot be all letters
-    if (/^[A-Za-z]+$/.test(clean)) return false;
-    
-    // Must have at least one letter and one number
-    if (!/[A-Za-z]/.test(clean) || !/\d/.test(clean)) return false;
+    // Must have at least one letter
+    if (!/[A-Za-z]/.test(clean)) return false;
     
     // Check against common non-code words that might be detected by OCR
     const common = [
@@ -488,7 +487,11 @@ export default function Scanner() {
 
       // Prefer continuous focus if available
       if (focusModes.includes("continuous")) {
-        try { track.applyConstraints && track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }); } catch {}
+        try { 
+          if (track.applyConstraints) {
+            track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+          }
+        } catch {}
       }
 
       // Initialize ImageCapture if available
@@ -527,7 +530,7 @@ export default function Scanner() {
     } catch {}
   }, [showBanner, showStatus, torchOn, torchSupported]);
 
-  const distanceBetweenTouches = (touches: TouchList) => {
+  const distanceBetweenTouches = (touches: React.TouchList) => {
     if (touches.length < 2) return 0;
     const dx = touches[0].clientX - touches[1].clientX;
     const dy = touches[0].clientY - touches[1].clientY;
@@ -544,14 +547,18 @@ export default function Scanner() {
       const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
       if (pointsOfInterestSupported) {
         try {
-          track.applyConstraints && track.applyConstraints({ advanced: [{ pointsOfInterest: [{ x, y }] }] });
+          if (track.applyConstraints) {
+            track.applyConstraints({ advanced: [{ pointsOfInterest: [{ x, y }] }] });
+          }
           showBanner("🎯 Focusing...", "info");
           return;
         } catch {}
       }
       if (singleShotFocusSupported) {
         try {
-          track.applyConstraints && track.applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
+          if (track.applyConstraints) {
+            track.applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
+          }
           showBanner("🎯 Focus triggered", "info");
         } catch {}
       }
@@ -716,7 +723,7 @@ export default function Scanner() {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       mediaStreamRef.current = stream;
       if (!viewportRef.current) return;
-      if (!videoRef.current) {
+      if (!videoRef.current || !viewportRef.current.contains(videoRef.current)) {
         const v = document.createElement("video");
         v.setAttribute("playsinline", "true");
         v.muted = true;
@@ -1043,6 +1050,42 @@ export default function Scanner() {
     setSelectedCans(newSelection);
   };
 
+  const submitFeedback = async () => {
+    if (!feedbackText.trim()) {
+      showStatus("Please enter some feedback.", "error");
+      return;
+    }
+
+    setIsSubmittingFeedback(true);
+    try {
+      const response = await fetch('/api/save-suggestion', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(userId && { 'X-User-ID': userId })
+        },
+        body: JSON.stringify({ 
+          suggestion: feedbackText.trim(),
+          user_id: userId 
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        showStatus("Thank you for your feedback! It helps improve the app.", "success");
+        setFeedbackText("");
+      } else {
+        showStatus(`Failed to submit feedback: ${result.error}`, "error");
+      }
+    } catch (error) {
+      showStatus("Failed to submit feedback. Please try again.", "error");
+      console.error("Feedback submission error:", error);
+    } finally {
+      setIsSubmittingFeedback(false);
+    }
+  };
+
   const filteredUserCans = userCans?.filter(can => {
     switch (redeemFilter) {
       case 'redeemed':
@@ -1056,6 +1099,25 @@ export default function Scanner() {
 
   return (
     <div className="container">
+      {/* Nicotine Warning Banner */}
+      <div style={{
+        background: "linear-gradient(135deg, #ff6b6b, #ee5a52)",
+        color: "white",
+        padding: "12px 16px",
+        borderRadius: "8px",
+        marginBottom: "16px",
+        textAlign: "center",
+        fontSize: "14px",
+        fontWeight: "500",
+        boxShadow: "0 4px 12px rgba(255, 107, 107, 0.3)",
+        animation: "fadeInDown 0.4s ease-out"
+      }}>
+        ⚠️ <strong>WARNING:</strong> This application is for tracking ZYN can purchases for rewards. 
+        ZYN contains nicotine, which is an addictive chemical. Nicotine can cause addiction and 
+        may be harmful to your health. This app is designed to help track usage patterns and 
+        support those seeking to reduce or quit nicotine consumption.
+      </div>
+
       {/* Cans Scanned Counter */}
       {supabase && (
         <div className="customize" style={{ 
@@ -1103,7 +1165,7 @@ export default function Scanner() {
           <button id="startScanButton" className="start-btn" onClick={(e) => { e.stopPropagation(); startCamera(); }} style={{ display: isScanning ? "none" : "inline-block" }}>
             Start Scan
           </button>
-          <button id="stopScanButton" className="stop-btn" onClick={(e) => { e.stopPropagation(); stopCamera(); if (viewportRef.current) viewportRef.current.innerHTML = ""; }} style={{ display: isScanning ? "inline-block" : "none" }}>
+          <button id="stopScanButton" className="stop-btn" onClick={(e) => { e.stopPropagation(); stopCamera(); if (viewportRef.current) { viewportRef.current.innerHTML = ""; videoRef.current = null; } }} style={{ display: isScanning ? "inline-block" : "none" }}>
             Stop Scan
           </button>
           <button
@@ -1122,7 +1184,7 @@ export default function Scanner() {
             aria-label="Toggle flashlight"
             style={{ display: isScanning && torchSupported ? "inline-block" : "none" }}
           >
-            {torchOn ? "Flash On" : "Flash Off"}
+            {torchOn ? "Flash Off" : "Flash On"}
           </button>
           <input
             id="zoomSlider"
@@ -1455,6 +1517,95 @@ export default function Scanner() {
       </div>
 
       <div id="status" className={`status ${status ? status.kind : "hidden"}`}>{status?.msg}</div>
+
+      {/* Personal Story Section */}
+      <div style={{
+        marginTop: "32px",
+        padding: "20px",
+        background: "rgba(255,255,255,0.05)",
+        borderRadius: "12px",
+        border: "1px solid rgba(255,255,255,0.1)",
+        animation: "fadeInUp 1.6s ease-out"
+      }}>
+        <h3 style={{ 
+          margin: "0 0 16px 0", 
+          color: "#00cc6a", 
+          fontSize: "18px",
+          textAlign: "center"
+        }}>
+          Why I Made This App
+        </h3>
+        <div style={{ 
+          lineHeight: "1.6", 
+          fontSize: "14px", 
+          color: "rgba(255,255,255,0.9)",
+          textAlign: "center"
+        }}>
+          I made this app to track my ZYN can purchase history, as a way to bring visibility to the problem, and eventually quit this addictive habit.
+          <br /><br />
+          I hope you enjoy this app, and you also are hoping to quit too. Nobody likes being addicted to something!
+        </div>
+      </div>
+
+      {/* Feedback Section */}
+      <div style={{
+        marginTop: "20px",
+        padding: "20px",
+        background: "rgba(255,255,255,0.05)",
+        borderRadius: "12px",
+        border: "1px solid rgba(255,255,255,0.1)",
+        animation: "fadeInUp 1.8s ease-out"
+      }}>
+        <h3 style={{ 
+          margin: "0 0 16px 0", 
+          color: "#4a90e2", 
+          fontSize: "18px",
+          textAlign: "center"
+        }}>
+          Want to give feedback on what to improve?
+        </h3>
+        <div style={{ marginBottom: "12px" }}>
+          <textarea
+            value={feedbackText}
+            onChange={(e) => setFeedbackText(e.target.value)}
+            placeholder="Share your ideas, suggestions, or report bugs..."
+            style={{
+              width: "100%",
+              minHeight: "80px",
+              padding: "12px",
+              borderRadius: "8px",
+              border: "1px solid rgba(255,255,255,0.3)",
+              background: "rgba(255,255,255,0.1)",
+              color: "white",
+              fontSize: "14px",
+              resize: "vertical",
+              fontFamily: "inherit"
+            }}
+          />
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <button
+            onClick={submitFeedback}
+            disabled={isSubmittingFeedback || !feedbackText.trim()}
+            style={{
+              background: isSubmittingFeedback || !feedbackText.trim() 
+                ? "rgba(255,255,255,0.2)" 
+                : "#4a90e2",
+              color: "white",
+              border: "none",
+              borderRadius: "8px",
+              padding: "10px 20px",
+              fontSize: "14px",
+              fontWeight: "500",
+              cursor: isSubmittingFeedback || !feedbackText.trim() ? "not-allowed" : "pointer",
+              opacity: isSubmittingFeedback || !feedbackText.trim() ? 0.6 : 1,
+              transition: "all 0.3s ease"
+            }}
+          >
+            {isSubmittingFeedback ? "Submitting..." : "Submit Feedback"}
+          </button>
+        </div>
+      </div>
 
       <div className="footer" style={{ display: "none" }} />
     </div>

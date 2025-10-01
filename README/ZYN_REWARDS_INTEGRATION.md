@@ -90,3 +90,4 @@ Run the SQL script in `security/add-redeemed-column.sql` in your Supabase dashbo
 - **Reward Points Tracking**: Display accumulated points from redemptions
 - **Batch Size Optimization**: Adjustable batch sizes based on API performance
 - **Retry Logic**: Automatic retry for failed redemptions
+
