@@ -18,7 +18,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Authentication
-    await authenticateRequest(request)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { user } = await authenticateRequest(request)
+    // Note: user is available for future use if needed
 
     const { codeIds } = await request.json()
     
