@@ -179,7 +179,7 @@ h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; background: linear-g
 .instructions-compact { max-width: 480px; text-align: center; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2); border-radius: 14px; padding: 14px 16px; line-height: 1.35; }
 
 /* Buttons */
-.start-btn, .stop-btn, .capture-btn { 
+.start-btn, .stop-btn, .capture-btn, .torch-btn { 
   position: absolute; 
   left: 50%; 
   transform: translateX(-50%); 
@@ -210,12 +210,33 @@ h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; background: linear-g
   padding: 8px 14px; 
   display: none; 
 }
+.torch-btn {
+  bottom: 22%;
+  background: #ffffff;
+  padding: 8px 14px;
+  /* Override centering for torch: place near right edge inside puck */
+  left: auto;
+  right: 12%;
+  transform: none;
+  display: none;
+}
 .start-btn:hover, .stop-btn:hover, .capture-btn:hover { 
   transform: translateX(-50%) scale(1.05); 
   box-shadow: 0 6px 20px rgba(0,0,0,0.25);
 }
 .start-btn:active, .stop-btn:active, .capture-btn:active { 
   transform: translateX(-50%) scale(0.98); 
+}
+
+/* Zoom slider */
+.zoom-slider {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 4%;
+  width: 60%;
+  z-index: 5;
+  display: none;
 }
 
 .customize { display: flex; align-items: center; gap: 10px; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2); padding: 10px 12px; border-radius: 12px; }

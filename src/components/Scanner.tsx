@@ -28,6 +28,21 @@ export default function Scanner() {
   const ocrTimerRef = useRef<number | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mpPollRef = useRef<number | null>(null);
+  const imageCaptureRef = useRef<any | null>(null);
+  const pinchStartDistRef = useRef<number | null>(null);
+  const pinchStartZoomRef = useRef<number>(1);
+
+  const [zoomSupported, setZoomSupported] = useState(false);
+  const [zoomMin, setZoomMin] = useState<number>(1);
+  const [zoomMax, setZoomMax] = useState<number>(1);
+  const [zoomStep, setZoomStep] = useState<number>(0.1);
+  const [zoomValue, setZoomValue] = useState<number>(1);
+
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
+
+  const [pointsOfInterestSupported, setPointsOfInterestSupported] = useState(false);
+  const [singleShotFocusSupported, setSingleShotFocusSupported] = useState(false);
 
   const handleColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newColor = e.target.value;
@@ -394,6 +409,162 @@ export default function Scanner() {
     }
   }, []);
 
+  const initTrackControls = useCallback(() => {
+    try {
+      const track = mediaStreamRef.current?.getVideoTracks?.()[0];
+      if (!track) return;
+      const caps = (track as any).getCapabilities ? (track as any).getCapabilities() : {};
+      const settings = (track as any).getSettings ? (track as any).getSettings() : {};
+
+      // Zoom support
+      if (typeof caps.zoom === "number" || (caps.zoom && typeof caps.zoom.min !== "undefined")) {
+        const min = typeof caps.zoom.min === "number" ? caps.zoom.min : (typeof caps.zoom === "number" ? 1 : 1);
+        const max = typeof caps.zoom.max === "number" ? caps.zoom.max : (typeof caps.zoom === "number" ? caps.zoom : 1);
+        const step = typeof caps.zoom.step === "number" && caps.zoom.step > 0 ? caps.zoom.step : 0.1;
+        const current = typeof settings.zoom === "number" ? settings.zoom : min;
+        setZoomMin(min);
+        setZoomMax(max);
+        setZoomStep(step);
+        setZoomValue(current);
+        setZoomSupported(max > min);
+      } else {
+        setZoomSupported(false);
+      }
+
+      // Torch support
+      setTorchSupported(!!caps.torch);
+
+      // Focus support
+      setPointsOfInterestSupported(!!caps.pointsOfInterest);
+      const focusModes: string[] = Array.isArray(caps.focusMode) ? caps.focusMode : [];
+      setSingleShotFocusSupported(focusModes.includes("single-shot"));
+
+      // Prefer continuous focus if available
+      if (focusModes.includes("continuous")) {
+        try { (track as any).applyConstraints({ advanced: [{ focusMode: "continuous" }] }); } catch {}
+      }
+
+      // Initialize ImageCapture if available
+      try {
+        const w = window as any;
+        if (typeof w.ImageCapture === "function") {
+          imageCaptureRef.current = new w.ImageCapture(track);
+        }
+      } catch {}
+    } catch {}
+  }, []);
+
+  const applyZoom = useCallback(async (value: number) => {
+    try {
+      const track = mediaStreamRef.current?.getVideoTracks?.()[0];
+      if (!track || !zoomSupported) return;
+      const clamped = Math.max(zoomMin, Math.min(zoomMax, value));
+      setZoomValue(clamped);
+      try {
+        await (track as any).applyConstraints({ advanced: [{ zoom: clamped }] });
+      } catch {
+        await (track as any).applyConstraints({ zoom: clamped });
+      }
+    } catch {}
+  }, [zoomMax, zoomMin, zoomSupported]);
+
+  const toggleTorch = useCallback(async () => {
+    try {
+      const track = mediaStreamRef.current?.getVideoTracks?.()[0];
+      if (!track || !torchSupported) return;
+      const next = !torchOn;
+      try {
+        await (track as any).applyConstraints({ advanced: [{ torch: next }] });
+        setTorchOn(next);
+        showBanner(next ? "🔦 Flashlight on" : "🔦 Flashlight off", "info");
+      } catch {
+        showStatus("Torch not supported on this device.", "error");
+      }
+    } catch {}
+  }, [showBanner, showStatus, torchOn, torchSupported]);
+
+  const distanceBetweenTouches = (touches: TouchList) => {
+    if (touches.length < 2) return 0;
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const handleViewfinderClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    try {
+      const track = mediaStreamRef.current?.getVideoTracks?.()[0] as any;
+      if (!track || (!pointsOfInterestSupported && !singleShotFocusSupported)) return;
+      const vf = (e.currentTarget as HTMLDivElement);
+      const rect = vf.getBoundingClientRect();
+      const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+      if (pointsOfInterestSupported) {
+        try {
+          track.applyConstraints({ advanced: [{ pointsOfInterest: [{ x, y }] }] });
+          showBanner("🎯 Focusing...", "info");
+          return;
+        } catch {}
+      }
+      if (singleShotFocusSupported) {
+        try {
+          track.applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
+          showBanner("🎯 Focus triggered", "info");
+        } catch {}
+      }
+    } catch {}
+  }, [pointsOfInterestSupported, showBanner, singleShotFocusSupported]);
+
+  const handleViewfinderWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    if (!zoomSupported) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -zoomStep : zoomStep;
+    applyZoom(zoomValue + delta);
+  }, [applyZoom, zoomStep, zoomSupported, zoomValue]);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    if (!zoomSupported) return;
+    if (e.touches.length === 2) {
+      pinchStartDistRef.current = distanceBetweenTouches(e.touches);
+      pinchStartZoomRef.current = zoomValue;
+    }
+  }, [zoomSupported, zoomValue]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    if (!zoomSupported) return;
+    if (e.touches.length === 2 && pinchStartDistRef.current) {
+      e.preventDefault();
+      const current = distanceBetweenTouches(e.touches);
+      const ratio = current / Math.max(1, pinchStartDistRef.current);
+      const target = pinchStartZoomRef.current * ratio;
+      applyZoom(target);
+    }
+  }, [applyZoom, zoomSupported]);
+
+  const handleTouchEnd = useCallback(() => {
+    pinchStartDistRef.current = null;
+  }, []);
+
+  const captureStill = useCallback(async () => {
+    try {
+      if (!videoRef.current) return;
+      showBanner("📸 Capturing...", "info");
+      // Reuse the existing decode passes against the current video frame
+      const qr = readQrInViewfinderOnce();
+      if (qr && qr.text) {
+        const urlCode = extractCodeFromURL(qr.text) || null;
+        const printed = await ocrUnderViewfinderOnce(false);
+        if (printed && isValidProductCode(printed)) { processFoundCode(printed); return; }
+        if (urlCode && isValidProductCode(urlCode)) { processFoundCode(urlCode); return; }
+      } else {
+        const printed = await ocrUnderViewfinderOnce(false);
+        if (printed && isValidProductCode(printed)) { processFoundCode(printed); return; }
+      }
+      showStatus("No code found in captured frame.", "error");
+    } catch {
+      showStatus("Capture failed.", "error");
+    }
+  }, [extractCodeFromURL, ocrUnderViewfinderOnce, processFoundCode, readQrInViewfinderOnce, showBanner, showStatus]);
+
   // Wait for the <video> element to have non-zero dimensions
   const waitForVideoDims = useCallback(async () => {
     for (let i = 0; i < 25; i++) {
@@ -518,6 +689,7 @@ export default function Scanner() {
       await video.play();
       await waitForVideoDims();
       updateMp();
+      initTrackControls();
       if (mpPollRef.current) { window.clearInterval(mpPollRef.current); mpPollRef.current = null; }
       let polls = 0;
       mpPollRef.current = window.setInterval(() => {
@@ -563,7 +735,7 @@ export default function Scanner() {
     } catch {
       showStatus("Camera not available. Please use manual entry.", "error");
     }
-  }, [extractCodeFromURL, ocrUnderViewfinderOnce, processFoundCode, readQrInViewfinderOnce, showBanner, showStatus, updateMp, waitForVideoDims]);
+  }, [extractCodeFromURL, initTrackControls, ocrUnderViewfinderOnce, processFoundCode, readQrInViewfinderOnce, showBanner, showStatus, updateMp, waitForVideoDims]);
 
   const resetScanner = useCallback(() => {
     setScannedCode(null);
@@ -871,7 +1043,16 @@ export default function Scanner() {
           <div className="puck-green">
             <div className="puck-green-top" />
           </div>
-          <div className="viewfinder-wrap">
+          <div
+            className="viewfinder-wrap"
+            onClick={(e) => { e.stopPropagation(); handleViewfinderClick(e); }}
+            onWheel={(e) => { e.stopPropagation(); handleViewfinderWheel(e); }}
+            onTouchStart={(e) => { e.stopPropagation(); handleTouchStart(e); }}
+            onTouchMove={(e) => { e.stopPropagation(); handleTouchMove(e); }}
+            onTouchEnd={(e) => { e.stopPropagation(); handleTouchEnd(); }}
+            role="button"
+            aria-label="Scanner viewfinder"
+          >
             <div id="scanner-viewport" ref={viewportRef} />
           </div>
           <div id="mpLabel" className="mp-label">{mpLabel}</div>
@@ -881,6 +1062,36 @@ export default function Scanner() {
           <button id="stopScanButton" className="stop-btn" onClick={(e) => { e.stopPropagation(); stopCamera(); if (viewportRef.current) viewportRef.current.innerHTML = ""; }} style={{ display: isScanning ? "inline-block" : "none" }}>
             Stop Scan
           </button>
+          <button
+            id="captureButton"
+            className="capture-btn"
+            onClick={(e) => { e.stopPropagation(); captureStill(); }}
+            aria-label="Capture still frame"
+            style={{ display: isScanning ? "inline-block" : "none" }}
+          >
+            Capture
+          </button>
+          <button
+            id="torchButton"
+            className="torch-btn"
+            onClick={(e) => { e.stopPropagation(); toggleTorch(); }}
+            aria-label="Toggle flashlight"
+            style={{ display: isScanning && torchSupported ? "inline-block" : "none" }}
+          >
+            {torchOn ? "Flash On" : "Flash Off"}
+          </button>
+          <input
+            id="zoomSlider"
+            className="zoom-slider"
+            type="range"
+            min={zoomMin}
+            max={zoomMax}
+            step={zoomStep}
+            value={zoomValue}
+            onChange={(e) => { e.stopPropagation(); applyZoom(parseFloat(e.target.value)); }}
+            aria-label="Zoom"
+            style={{ display: isScanning && zoomSupported ? "inline-block" : "none" }}
+          />
         </div>
       </div>
 
