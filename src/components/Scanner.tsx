@@ -63,6 +63,8 @@ export default function Scanner() {
   const [redeemFilter, setRedeemFilter] = useState<'all' | 'redeemed' | 'unredeemed'>('all');
   const [feedbackText, setFeedbackText] = useState<string>("");
   const [isSubmittingFeedback, setIsSubmittingFeedback] = useState<boolean>(false);
+  const [showExport, setShowExport] = useState<boolean>(false);
+  const [exportText, setExportText] = useState<string>("");
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -1086,6 +1088,26 @@ export default function Scanner() {
     }
   };
 
+  const openExportCodes = () => {
+    try {
+      const codes = (filteredUserCans || []).map((c) => c.code).join("\n");
+      setExportText(codes);
+      setShowExport(true);
+    } catch {
+      setExportText("");
+      setShowExport(true);
+    }
+  };
+
+  const copyExportToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(exportText);
+      showStatus("Codes copied to clipboard!", "success");
+    } catch {
+      showStatus("Failed to copy codes.", "error");
+    }
+  };
+
   const filteredUserCans = userCans?.filter(can => {
     switch (redeemFilter) {
       case 'redeemed':
@@ -1328,24 +1350,40 @@ export default function Scanner() {
               </div>
               
               {/* Filter dropdown */}
-              <div style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
-                <label style={{ fontSize: 12, opacity: 0.8 }}>Filter:</label>
-                <select 
-                  value={redeemFilter} 
-                  onChange={(e) => setRedeemFilter(e.target.value as 'all' | 'redeemed' | 'unredeemed')}
-                  style={{
-                    padding: "2px 6px",
-                    fontSize: 11,
-                    borderRadius: 4,
-                    background: "rgba(255,255,255,0.1)",
+              <div style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <label style={{ fontSize: 12, opacity: 0.8 }}>Filter:</label>
+                  <select 
+                    value={redeemFilter} 
+                    onChange={(e) => setRedeemFilter(e.target.value as 'all' | 'redeemed' | 'unredeemed')}
+                    style={{
+                      padding: "2px 6px",
+                      fontSize: 11,
+                      borderRadius: 4,
+                      background: "rgba(255,255,255,0.1)",
+                      color: "white",
+                      border: "1px solid rgba(255,255,255,0.2)"
+                    }}
+                  >
+                    <option value="all">All Codes</option>
+                    <option value="unredeemed">Unredeemed</option>
+                    <option value="redeemed">Redeemed</option>
+                  </select>
+                </div>
+                <button 
+                  onClick={openExportCodes}
+                  className="btn btn-small"
+                  style={{ 
+                    background: "#2ecc71",
                     color: "white",
-                    border: "1px solid rgba(255,255,255,0.2)"
+                    fontSize: 11,
+                    padding: "4px 8px",
+                    border: "1px solid rgba(255,255,255,0.2)",
+                    borderRadius: 4
                   }}
                 >
-                  <option value="all">All Codes</option>
-                  <option value="unredeemed">Unredeemed</option>
-                  <option value="redeemed">Redeemed</option>
-                </select>
+                  📄 Export Codes
+                </button>
               </div>
 
               {/* Batch redeem button */}
@@ -1450,6 +1488,94 @@ export default function Scanner() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Export Codes Popup */}
+      {showExport && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: "rgba(0, 0, 0, 0.8)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 1000,
+          padding: "20px"
+        }}>
+          <div style={{
+            background: "rgba(30, 30, 30, 0.95)",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: "12px",
+            padding: "20px",
+            maxWidth: "500px",
+            width: "100%",
+            maxHeight: "80vh",
+            display: "flex",
+            flexDirection: "column",
+            gap: "16px"
+          }}>
+            <div style={{ 
+              fontWeight: 600, 
+              textAlign: "center", 
+              fontSize: "18px",
+              color: "#2ecc71"
+            }}>
+              📄 Exported Codes
+            </div>
+            <div style={{ fontSize: "12px", opacity: 0.8, textAlign: "center" }}>
+              {filteredUserCans.length} codes ({redeemFilter === 'all' ? 'all' : redeemFilter})
+            </div>
+            <textarea
+              readOnly
+              value={exportText}
+              style={{
+                width: "100%",
+                minHeight: "200px",
+                padding: "12px",
+                borderRadius: "8px",
+                border: "1px solid rgba(255,255,255,0.2)",
+                background: "rgba(0,0,0,0.3)",
+                color: "#fff",
+                fontSize: "13px",
+                fontFamily: "monospace",
+                resize: "vertical"
+              }}
+            />
+            <div style={{ display: "flex", gap: "12px", justifyContent: "center" }}>
+              <button 
+                onClick={copyExportToClipboard}
+                className="btn btn-small"
+                style={{ 
+                  background: "#4a90e2", 
+                  color: "white", 
+                  padding: "8px 16px", 
+                  borderRadius: "6px",
+                  fontSize: "14px",
+                  fontWeight: "500"
+                }}
+              >
+                📋 Copy to Clipboard
+              </button>
+              <button 
+                onClick={() => setShowExport(false)}
+                className="btn btn-small"
+                style={{ 
+                  background: "rgba(255,255,255,0.15)", 
+                  color: "white", 
+                  padding: "8px 16px", 
+                  borderRadius: "6px",
+                  fontSize: "14px",
+                  fontWeight: "500"
+                }}
+              >
+                ✕ Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
