@@ -371,22 +371,22 @@ export default function Scanner() {
   }, [hideBanner]);
 
   const processFoundCode = useCallback(async (code: string) => {
-    const normalized = code.trim().toUpperCase();
+    const scanned = code.trim();
     // Check duplicate in Supabase (if configured)
     if (supabase) {
       try {
         const { data: existing, error: selErr } = await supabase
           .from("scanned_codes")
           .select("id, code")
-          .eq("code", normalized)
+          .ilike("code", scanned)
           .maybeSingle();
         if (selErr) throw selErr;
         if (existing) {
-          setScannedCode(normalized);
+          setScannedCode(existing.code || scanned);
           stopCamera();
           showStatus("This code was already scanned.", "error");
-          showBanner(`⚠️ Already scanned: ${normalized}`, "error");
-          try { await navigator.clipboard.writeText(normalized); } catch {}
+          showBanner(`⚠️ Already scanned: ${existing.code || scanned}`, "error");
+          try { await navigator.clipboard.writeText(existing.code || scanned); } catch {}
           return;
         }
       } catch {
@@ -394,12 +394,12 @@ export default function Scanner() {
       }
     }
 
-    setScannedCode(normalized);
+    setScannedCode(scanned);
     stopCamera();
     showStatus("Code found! Copied to clipboard.", "success");
-    showBanner(`✅ Found: ${normalized}`, "success");
+    showBanner(`✅ Found: ${scanned}`, "success");
     try {
-      await navigator.clipboard.writeText(normalized);
+      await navigator.clipboard.writeText(scanned);
       showBanner("✅ Copied to clipboard", "success");
     } catch {}
     try {
@@ -430,7 +430,7 @@ export default function Scanner() {
       const response = await fetch('/api/save-code', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ code: normalized })
+        body: JSON.stringify({ code: scanned })
       });
       
       if (response.ok) {
@@ -560,7 +560,7 @@ export default function Scanner() {
         const { data: { text } } = await Tesseract.recognize(
           canvas.toDataURL("image/png"),
           "eng",
-          { tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" }
+          { tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" }
         );
         const raw = (text || "").replace(/\s+/g, " ").trim();
         if (!raw) return [];
