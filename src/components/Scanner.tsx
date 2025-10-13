@@ -537,7 +537,7 @@ export default function Scanner() {
         const h = Math.min(stripHeight, bottomY - y);
         if (w > 10 && h > 10) bands.push({ x, y, w, h });
       }
-
+      
       const recognizeBand = async (band: Band): Promise<string[]> => {
         const canvas = document.createElement("canvas");
         canvas.width = band.w;
@@ -556,11 +556,10 @@ export default function Scanner() {
         }
         ctx.putImageData(imageData, 0, 0);
 
-        // Restrict OCR to uppercase alphanumeric to reduce confusion (O/0, I/1, B/8, S/5)
+        // Perform OCR on the cropped band
         const { data: { text } } = await Tesseract.recognize(
           canvas.toDataURL("image/png"),
-          "eng",
-          { tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" }
+          "eng"
         );
         const raw = (text || "").replace(/\s+/g, " ").trim();
         if (!raw) return [];
