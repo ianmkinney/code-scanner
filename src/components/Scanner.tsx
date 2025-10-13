@@ -116,6 +116,7 @@ export default function Scanner() {
 
   const isValidProductCode = (code: string) => {
     const clean = code.trim().replace(/\s/g, "");
+    const hasDigit = /\d/.test(clean);
     
     // Basic length check
     if (clean.length < 6 || clean.length > 25) return false;
@@ -262,25 +263,29 @@ export default function Scanner() {
     }
     
     // Avoid codes that are mostly consonants or mostly vowels (common OCR errors)
-    const vowels = /[AEIOUaeiou]/g;
-    const consonants = /[BCDFGHJKLMNPQRSTVWXYZbcdfghjklmnpqrstvwxyz]/g;
-    const vowelCount = (clean.match(vowels) || []).length;
-    const consonantCount = (clean.match(consonants) || []).length;
-    const totalLetters = vowelCount + consonantCount;
-    
-    if (totalLetters >= 6) {
-      const vowelRatio = vowelCount / totalLetters;
-      const consonantRatio = consonantCount / totalLetters;
-      
-      // If more than 80% vowels or consonants, likely an OCR error
-      if (vowelRatio > 0.8 || consonantRatio > 0.8) return false;
-      
-      // If more than 70% consonants and word is short, likely an OCR error
-      if (consonantRatio > 0.7 && clean.length <= 10) return false;
+    // Apply ONLY to tokens without digits to avoid rejecting valid alphanumerics like "x8BRJ9cmpT"
+    if (!hasDigit) {
+      const vowels = /[AEIOUaeiou]/g;
+      const consonants = /[BCDFGHJKLMNPQRSTVWXYZbcdfghjklmnpqrstvwxyz]/g;
+      const vowelCount = (clean.match(vowels) || []).length;
+      const consonantCount = (clean.match(consonants) || []).length;
+      const totalLetters = vowelCount + consonantCount;
+
+      if (totalLetters >= 6) {
+        const vowelRatio = vowelCount / totalLetters;
+        const consonantRatio = consonantCount / totalLetters;
+
+        // If more than 80% vowels or consonants, likely an OCR error
+        if (vowelRatio > 0.8 || consonantRatio > 0.8) return false;
+
+        // If more than 70% consonants and word is short, likely an OCR error
+        if (consonantRatio > 0.7 && clean.length <= 10) return false;
+      }
     }
     
     // Avoid codes that contain common English word patterns
-    const commonPatterns = [
+    // Apply English-word prefix/suffix patterns only to tokens without digits
+    const commonPatterns = hasDigit ? [] : [
       /^THE[A-Z0-9]*$/i,  // THE + anything
       /^AND[A-Z0-9]*$/i,  // AND + anything  
       /^FOR[A-Z0-9]*$/i,  // FOR + anything
