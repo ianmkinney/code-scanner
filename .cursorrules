@@ -1,0 +1,29 @@
+# Cursor Rules for Code Scanner Project
+
+## Purpose
+When a user reports “a code is not scanning/working,” Cursor should:
+- Create a focused, reproducible test first that encodes the reported example code as-is (including casing).
+- Run tests, then adjust validation/recognition logic until the new test passes.
+
+## Test Authoring Rules
+- Place tests for code format acceptance in `src/lib/validation.test.ts` or a nearby `*.test.ts` file.
+- Use the exact code string from the user report in the test without altering case.
+- Prefer small, high-signal tests with one clear assertion proving the regression.
+- If the failure is in OCR or extraction heuristics, author a unit test around the specific helper (e.g., `isValidProductCode`, URL extraction) and, if needed, an integration test using a minimal fixture.
+
+## Implementation Rules
+- Preserve original code casing in storage and UI; never normalize before saving.
+- Duplicate checks must be case-insensitive; retain original-cased version for display.
+- Validation must accept mixed-case alphanumerics 6–25 chars, reject non-alphanumerics and all-numeric.
+- Avoid adding rules that would reject otherwise valid alphanumeric codes containing digits.
+
+## Workflow
+1) Add a failing test reflecting the user’s example (e.g., `3NkNwR2JcB`).
+2) Run `npm test` to see failure.
+3) Modify validation/extraction to pass the test while keeping other tests green.
+4) If the code path involves API routes, add/adjust unit tests in `src/app/api/**/__tests__` or `src/lib/**`.
+
+## Commit Message Guidance
+- Start with “test:” when introducing new failing tests.
+- Use “fix:” when changing validation/recognition logic to satisfy tests.
+
