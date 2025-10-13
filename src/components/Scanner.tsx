@@ -371,21 +371,22 @@ export default function Scanner() {
   }, [hideBanner]);
 
   const processFoundCode = useCallback(async (code: string) => {
+    const scanned = code.trim();
     // Check duplicate in Supabase (if configured)
     if (supabase) {
       try {
         const { data: existing, error: selErr } = await supabase
           .from("scanned_codes")
           .select("id, code")
-          .eq("code", code)
+          .ilike("code", scanned)
           .maybeSingle();
         if (selErr) throw selErr;
         if (existing) {
-          setScannedCode(code);
+          setScannedCode(existing.code || scanned);
           stopCamera();
           showStatus("This code was already scanned.", "error");
-          showBanner(`⚠️ Already scanned: ${code}`, "error");
-          try { await navigator.clipboard.writeText(code); } catch {}
+          showBanner(`⚠️ Already scanned: ${existing.code || scanned}`, "error");
+          try { await navigator.clipboard.writeText(existing.code || scanned); } catch {}
           return;
         }
       } catch {
@@ -393,12 +394,12 @@ export default function Scanner() {
       }
     }
 
-    setScannedCode(code);
+    setScannedCode(scanned);
     stopCamera();
     showStatus("Code found! Copied to clipboard.", "success");
-    showBanner(`✅ Found: ${code}`, "success");
+    showBanner(`✅ Found: ${scanned}`, "success");
     try {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(scanned);
       showBanner("✅ Copied to clipboard", "success");
     } catch {}
     try {
@@ -429,7 +430,7 @@ export default function Scanner() {
       const response = await fetch('/api/save-code', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ code })
+        body: JSON.stringify({ code: scanned })
       });
       
       if (response.ok) {
@@ -509,46 +510,86 @@ export default function Scanner() {
       const scaleX = vw / vpRect.width;
       const scaleY = vh / vpRect.height;
       const vfBottomYVideo = (vfRect.bottom - vpRect.top) * scaleY;
+      const vfTopYVideo = (vfRect.top - vpRect.top) * scaleY;
       const vfLeftXVideo = (vfRect.left - vpRect.left) * scaleX;
       const vfWidthVideo = vfRect.width * scaleX;
       const margin = Math.floor(vfRect.height * 0.04 * scaleY);
       const stripHeight = Math.floor(vfRect.height * 0.16 * scaleY);
       const centerX = Math.floor(vfLeftXVideo + vfWidthVideo / 2);
       const halfStripWidth = Math.floor(vfWidthVideo * 0.35);
-      const ocrX = Math.max(0, centerX - halfStripWidth);
-      const ocrY = Math.min(vh - 1, Math.floor(vfBottomYVideo + margin));
-      const ocrWidth = Math.min(vw - ocrX, halfStripWidth * 2);
-      const ocrHeight = Math.min(vh - ocrY, stripHeight);
-      const canvas = document.createElement("canvas");
-      canvas.width = ocrWidth;
-      canvas.height = ocrHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return null;
-      ctx.drawImage(video, ocrX, ocrY, ocrWidth, ocrHeight, 0, 0, ocrWidth, ocrHeight);
-      const imageData = ctx.getImageData(0, 0, ocrWidth, ocrHeight);
-      const data = imageData.data;
-      for (let i = 0; i < data.length; i += 4) {
-        const r = data[i], g = data[i + 1], b = data[i + 2];
-        let gray = 0.299 * r + 0.587 * g + 0.114 * b;
-        gray = Math.max(0, Math.min(255, (gray - 110) * 2.2));
-        const bw = gray > 150 ? 255 : 0;
-        data[i] = data[i + 1] = data[i + 2] = bw;
+
+      type Band = { x: number; y: number; w: number; h: number };
+      const bands: Band[] = [];
+      // Band below the viewfinder
+      {
+        const x = Math.max(0, centerX - halfStripWidth);
+        const y = Math.min(vh - 1, Math.floor(vfBottomYVideo + margin));
+        const w = Math.min(vw - x, halfStripWidth * 2);
+        const h = Math.min(vh - y, stripHeight);
+        if (w > 10 && h > 10) bands.push({ x, y, w, h });
       }
-      ctx.putImageData(imageData, 0, 0);
-      if (!silent) showBanner("🔎 Reading code under QR...", "info");
-      // Note: tesseract.js types are permissive; we pass vendor-specific params
-      const { data: { text } } = await Tesseract.recognize(canvas.toDataURL("image/png"), "eng");
-      const raw = (text || "").replace(/\s+/g, " ").trim();
-      const tokens = raw.split(/[^A-Za-z0-9]+/).filter(Boolean);
-      let best = "";
+      // Band above the viewfinder
+      {
+        const x = Math.max(0, centerX - halfStripWidth);
+        const bottomY = Math.max(0, Math.floor(vfTopYVideo - margin));
+        const y = Math.max(0, bottomY - stripHeight);
+        const w = Math.min(vw - x, halfStripWidth * 2);
+        const h = Math.min(stripHeight, bottomY - y);
+        if (w > 10 && h > 10) bands.push({ x, y, w, h });
+      }
       
-      for (const t of tokens) {
-        // Only consider tokens that are valid product codes
-        if (t.length > best.length && isValidProductCode(t)) {
-          best = t;
+      const recognizeBand = async (band: Band): Promise<string[]> => {
+        const canvas = document.createElement("canvas");
+        canvas.width = band.w;
+        canvas.height = band.h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return [];
+        ctx.drawImage(video, band.x, band.y, band.w, band.h, 0, 0, band.w, band.h);
+        const imageData = ctx.getImageData(0, 0, band.w, band.h);
+        const data = imageData.data;
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          let gray = 0.299 * r + 0.587 * g + 0.114 * b;
+          gray = Math.max(0, Math.min(255, (gray - 110) * 2.2));
+          const bw = gray > 150 ? 255 : 0;
+          data[i] = data[i + 1] = data[i + 2] = bw;
         }
+        ctx.putImageData(imageData, 0, 0);
+
+        // Perform OCR on the cropped band
+        const { data: { text } } = await Tesseract.recognize(
+          canvas.toDataURL("image/png"),
+          "eng"
+        );
+        const raw = (text || "").replace(/\s+/g, " ").trim();
+        if (!raw) return [];
+        return raw.split(/[^A-Za-z0-9]+/).filter(Boolean);
+      };
+
+      if (!silent) showBanner("🔎 Reading code near QR...", "info");
+
+      // Run OCR for each band sequentially to stay light on CPU
+      const allTokens: string[] = [];
+      for (const band of bands) {
+        const tokens = await recognizeBand(band);
+        allTokens.push(...tokens);
       }
-      
+
+      const rankToken = (t: string) => {
+        const upper = t.toUpperCase();
+        const hasDigit = /\d/.test(upper);
+        const lengthScore = upper.length;
+        const digitBonus = hasDigit ? 1000 : 0; // prioritize tokens containing digits
+        return digitBonus + lengthScore;
+      };
+
+      let best: string | null = null;
+      for (const t of allTokens) {
+        if (!isValidProductCode(t)) continue;
+        if (!best) { best = t; continue; }
+        if (rankToken(t) > rankToken(best)) best = t;
+      }
+
       return best || null;
     } catch {
       return null;
